@@ -5,10 +5,9 @@ Ansible MCP Server
 This server provides tools for interacting with the Ansible API through the Model Context Protocol.
 """
 
-import asyncio
 import os
 import json
-import httpx
+import requests
 from typing import Dict, List, Any, Optional, Union
 from urllib.parse import urljoin
 from mcp.server.fastmcp import FastMCP, Context
@@ -29,29 +28,85 @@ class AnsibleClient:
         self.username = username
         self.password = password
         self.token = token
-        self.client = httpx.AsyncClient()
+        self.session = requests.Session()
+        self.session.verify = False  # Handle SSL certificates
     
-    async def __aenter__(self):
+    def __enter__(self):
         if not self.token and self.username and self.password:
-            await self.get_token()
+            self.get_token()
         return self
     
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.client.aclose()
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.session.close()
     
-    async def get_token(self) -> str:
-        """Authenticate and get token."""
-        url = urljoin(self.base_url, "/api/v2/tokens/")
-        response = await self.client.post(
-            url,
-            json={"username": self.username, "password": self.password, "description": "MCP Server Token"},
-            auth=(self.username, self.password)
+    def get_token(self) -> str:
+        """Authenticate and get token using web session approach."""
+        # Step 1: Get the CSRF token
+        login_page = self.session.get(f"{self.base_url}/api/login/")
+        
+        # Get CSRF token from cookies
+        csrf_token = None
+        if 'csrftoken' in login_page.cookies:
+            csrf_token = login_page.cookies['csrftoken']
+        else:
+            # Try to find it in the content
+            import re
+            match = re.search(r'name="csrfmiddlewaretoken" value="([^"]+)"', login_page.text)
+            if match:
+                csrf_token = match.group(1)
+                
+        if not csrf_token:
+            raise Exception("Could not obtain CSRF token")
+            
+        # Step 2: Perform login
+        headers = {
+            'Referer': f"{self.base_url}/api/login/",
+            'X-CSRFToken': csrf_token
+        }
+        
+        login_data = {
+            "username": self.username,
+            "password": self.password,
+            "next": "/api/v2/"
+        }
+        
+        login_response = self.session.post(
+            f"{self.base_url}/api/login/",
+            data=login_data,
+            headers=headers
         )
-        if response.status_code == 201:
-            self.token = response.json().get("token")
+        
+        if login_response.status_code >= 400:
+            raise Exception(f"Login failed: {login_response.status_code} - {login_response.text}")
+            
+        # Step 3: Generate API token
+        token_headers = {
+            'Content-Type': 'application/json',
+            'Referer': f"{self.base_url}/api/v2/",
+        }
+        
+        # Use the updated CSRF token
+        if 'csrftoken' in self.session.cookies:
+            token_headers['X-CSRFToken'] = self.session.cookies['csrftoken']
+            
+        token_data = {
+            "description": "MCP Server Token",
+            "application": None,
+            "scope": "write"  # Using write scope for full access
+        }
+        
+        token_response = self.session.post(
+            f"{self.base_url}/api/v2/tokens/",
+            json=token_data,
+            headers=token_headers
+        )
+        
+        if token_response.status_code == 201:
+            token_data = token_response.json()
+            self.token = token_data.get('token')
             return self.token
         else:
-            raise Exception(f"Authentication failed: {response.status_code} - {response.text}")
+            raise Exception(f"Token creation failed: {token_response.status_code} - {token_response.text}")
     
     def get_headers(self) -> Dict[str, str]:
         """Get request headers with authorization."""
@@ -60,12 +115,12 @@ class AnsibleClient:
             headers["Authorization"] = f"Bearer {self.token}"
         return headers
     
-    async def request(self, method: str, endpoint: str, params: Dict = None, data: Dict = None) -> Dict:
+    def request(self, method: str, endpoint: str, params: Dict = None, data: Dict = None) -> Dict:
         """Make a request to the Ansible API."""
         url = urljoin(self.base_url, endpoint)
         headers = self.get_headers()
         
-        response = await self.client.request(
+        response = self.session.request(
             method=method,
             url=url,
             headers=headers,
@@ -79,11 +134,24 @@ class AnsibleClient:
             
         if response.status_code == 204:  # No content
             return {"status": "success"}
+        
+        # Handle empty responses
+        if not response.text.strip():
+            return {"status": "success", "message": "Empty response"}
             
-        return response.json()
+        # Try to parse as JSON, but handle non-JSON responses gracefully
+        try:
+            return response.json()
+        except json.JSONDecodeError:
+            # For non-JSON responses, return the text content
+            return {
+                "status": "success",
+                "content_type": response.headers.get("Content-Type", "unknown"),
+                "text": response.text[:1000]  # Return first 1000 chars to avoid massive responses
+            }
 
 # Helper Functions
-async def get_ansible_client() -> AnsibleClient:
+def get_ansible_client() -> AnsibleClient:
     """Get an initialized Ansible API client."""
     client = AnsibleClient(
         base_url=ANSIBLE_BASE_URL,
@@ -91,10 +159,9 @@ async def get_ansible_client() -> AnsibleClient:
         password=ANSIBLE_PASSWORD,
         token=ANSIBLE_TOKEN
     )
-    await client.__aenter__()
     return client
 
-async def handle_pagination(client: AnsibleClient, endpoint: str, params: Dict = None) -> List[Dict]:
+def handle_pagination(client: AnsibleClient, endpoint: str, params: Dict = None) -> List[Dict]:
     """Handle paginated results from Ansible API."""
     if params is None:
         params = {}
@@ -103,7 +170,7 @@ async def handle_pagination(client: AnsibleClient, endpoint: str, params: Dict =
     next_url = endpoint
     
     while next_url:
-        response = await client.request("GET", next_url, params=params)
+        response = client.request("GET", next_url, params=params)
         if "results" in response:
             results.extend(response["results"])
         else:
@@ -120,31 +187,31 @@ async def handle_pagination(client: AnsibleClient, endpoint: str, params: Dict =
 # MCP Tools - Inventory Management
 
 @mcp.tool()
-async def list_inventories(limit: int = 100, offset: int = 0) -> str:
+def list_inventories(limit: int = 100, offset: int = 0) -> str:
     """List all inventories.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        inventories = await handle_pagination(client, "/api/v2/inventories/", params)
+        inventories = handle_pagination(client, "/api/v2/inventories/", params)
         return json.dumps(inventories, indent=2)
 
 @mcp.tool()
-async def get_inventory(inventory_id: int) -> str:
+def get_inventory(inventory_id: int) -> str:
     """Get details about a specific inventory.
     
     Args:
         inventory_id: ID of the inventory
     """
-    async with await get_ansible_client() as client:
-        inventory = await client.request("GET", f"/api/v2/inventories/{inventory_id}/")
+    with get_ansible_client() as client:
+        inventory = client.request("GET", f"/api/v2/inventories/{inventory_id}/")
         return json.dumps(inventory, indent=2)
 
 @mcp.tool()
-async def create_inventory(name: str, organization_id: int, description: str = "") -> str:
+def create_inventory(name: str, organization_id: int, description: str = "") -> str:
     """Create a new inventory.
     
     Args:
@@ -152,17 +219,17 @@ async def create_inventory(name: str, organization_id: int, description: str = "
         organization_id: ID of the organization
         description: Description of the inventory
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "description": description,
             "organization": organization_id
         }
-        response = await client.request("POST", "/api/v2/inventories/", data=data)
+        response = client.request("POST", "/api/v2/inventories/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_inventory(inventory_id: int, name: str = None, description: str = None) -> str:
+def update_inventory(inventory_id: int, name: str = None, description: str = None) -> str:
     """Update an existing inventory.
     
     Args:
@@ -170,31 +237,42 @@ async def update_inventory(inventory_id: int, name: str = None, description: str
         name: New name for the inventory
         description: New description for the inventory
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
         if description:
             data["description"] = description
             
-        response = await client.request("PATCH", f"/api/v2/inventories/{inventory_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/inventories/{inventory_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_inventory(inventory_id: int) -> str:
-    """Delete an inventory.
-    
-    Args:
-        inventory_id: ID of the inventory
-    """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/inventories/{inventory_id}/")
-        return json.dumps({"status": "success", "message": f"Inventory {inventory_id} deleted"})
+def delete_inventory(inventory_id: int) -> str:
+    """Delete an inventory."""
+    with get_ansible_client() as client:
+        try:
+            response = client.session.delete(
+                f"{client.base_url}/api/v2/inventories/{inventory_id}/",
+                headers=client.get_headers()
+            )
+            # Don't try to parse as JSON if status code is 204 No Content
+            if response.status_code == 204:
+                return json.dumps({"status": "success", "message": f"Inventory {inventory_id} deleted"})
+            elif response.text:
+                try:
+                    return json.dumps(response.json(), indent=2)
+                except json.JSONDecodeError:
+                    return json.dumps({"status": "success", "message": f"Inventory {inventory_id} deleted"})
+            else:
+                return json.dumps({"status": "success", "message": f"Inventory {inventory_id} deleted"})
+        except Exception as e:
+            return json.dumps({"status": "error", "message": str(e)})
 
 # MCP Tools - Host Management
 
 @mcp.tool()
-async def list_hosts(inventory_id: int = None, limit: int = 100, offset: int = 0) -> str:
+def list_hosts(inventory_id: int = None, limit: int = 100, offset: int = 0) -> str:
     """List hosts, optionally filtered by inventory.
     
     Args:
@@ -202,7 +280,7 @@ async def list_hosts(inventory_id: int = None, limit: int = 100, offset: int = 0
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
         
         if inventory_id:
@@ -210,22 +288,22 @@ async def list_hosts(inventory_id: int = None, limit: int = 100, offset: int = 0
         else:
             endpoint = "/api/v2/hosts/"
             
-        hosts = await handle_pagination(client, endpoint, params)
+        hosts = handle_pagination(client, endpoint, params)
         return json.dumps(hosts, indent=2)
 
 @mcp.tool()
-async def get_host(host_id: int) -> str:
+def get_host(host_id: int) -> str:
     """Get details about a specific host.
     
     Args:
         host_id: ID of the host
     """
-    async with await get_ansible_client() as client:
-        host = await client.request("GET", f"/api/v2/hosts/{host_id}/")
+    with get_ansible_client() as client:
+        host = client.request("GET", f"/api/v2/hosts/{host_id}/")
         return json.dumps(host, indent=2)
 
 @mcp.tool()
-async def create_host(name: str, inventory_id: int, variables: str = "{}", description: str = "") -> str:
+def create_host(name: str, inventory_id: int, variables: str = "{}", description: str = "") -> str:
     """Create a new host in an inventory.
     
     Args:
@@ -240,18 +318,18 @@ async def create_host(name: str, inventory_id: int, variables: str = "{}", descr
     except json.JSONDecodeError:
         return json.dumps({"status": "error", "message": "Invalid JSON in variables"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "inventory": inventory_id,
             "variables": variables,
             "description": description
         }
-        response = await client.request("POST", "/api/v2/hosts/", data=data)
+        response = client.request("POST", "/api/v2/hosts/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_host(host_id: int, name: str = None, variables: str = None, description: str = None) -> str:
+def update_host(host_id: int, name: str = None, variables: str = None, description: str = None) -> str:
     """Update an existing host.
     
     Args:
@@ -267,7 +345,7 @@ async def update_host(host_id: int, name: str = None, variables: str = None, des
         except json.JSONDecodeError:
             return json.dumps({"status": "error", "message": "Invalid JSON in variables"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
@@ -276,24 +354,24 @@ async def update_host(host_id: int, name: str = None, variables: str = None, des
         if description:
             data["description"] = description
             
-        response = await client.request("PATCH", f"/api/v2/hosts/{host_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/hosts/{host_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_host(host_id: int) -> str:
+def delete_host(host_id: int) -> str:
     """Delete a host.
     
     Args:
         host_id: ID of the host
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/hosts/{host_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/hosts/{host_id}/")
         return json.dumps({"status": "success", "message": f"Host {host_id} deleted"})
 
 # MCP Tools - Group Management
 
 @mcp.tool()
-async def list_groups(inventory_id: int, limit: int = 100, offset: int = 0) -> str:
+def list_groups(inventory_id: int, limit: int = 100, offset: int = 0) -> str:
     """List groups in an inventory.
     
     Args:
@@ -301,24 +379,24 @@ async def list_groups(inventory_id: int, limit: int = 100, offset: int = 0) -> s
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        groups = await handle_pagination(client, f"/api/v2/inventories/{inventory_id}/groups/", params)
+        groups = handle_pagination(client, f"/api/v2/inventories/{inventory_id}/groups/", params)
         return json.dumps(groups, indent=2)
 
 @mcp.tool()
-async def get_group(group_id: int) -> str:
+def get_group(group_id: int) -> str:
     """Get details about a specific group.
     
     Args:
         group_id: ID of the group
     """
-    async with await get_ansible_client() as client:
-        group = await client.request("GET", f"/api/v2/groups/{group_id}/")
+    with get_ansible_client() as client:
+        group = client.request("GET", f"/api/v2/groups/{group_id}/")
         return json.dumps(group, indent=2)
 
 @mcp.tool()
-async def create_group(name: str, inventory_id: int, variables: str = "{}", description: str = "") -> str:
+def create_group(name: str, inventory_id: int, variables: str = "{}", description: str = "") -> str:
     """Create a new group in an inventory.
     
     Args:
@@ -333,18 +411,18 @@ async def create_group(name: str, inventory_id: int, variables: str = "{}", desc
     except json.JSONDecodeError:
         return json.dumps({"status": "error", "message": "Invalid JSON in variables"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "inventory": inventory_id,
             "variables": variables,
             "description": description
         }
-        response = await client.request("POST", "/api/v2/groups/", data=data)
+        response = client.request("POST", "/api/v2/groups/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_group(group_id: int, name: str = None, variables: str = None, description: str = None) -> str:
+def update_group(group_id: int, name: str = None, variables: str = None, description: str = None) -> str:
     """Update an existing group.
     
     Args:
@@ -360,7 +438,7 @@ async def update_group(group_id: int, name: str = None, variables: str = None, d
         except json.JSONDecodeError:
             return json.dumps({"status": "error", "message": "Invalid JSON in variables"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
@@ -369,73 +447,73 @@ async def update_group(group_id: int, name: str = None, variables: str = None, d
         if description:
             data["description"] = description
             
-        response = await client.request("PATCH", f"/api/v2/groups/{group_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/groups/{group_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_group(group_id: int) -> str:
+def delete_group(group_id: int) -> str:
     """Delete a group.
     
     Args:
         group_id: ID of the group
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/groups/{group_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/groups/{group_id}/")
         return json.dumps({"status": "success", "message": f"Group {group_id} deleted"})
 
 @mcp.tool()
-async def add_host_to_group(group_id: int, host_id: int) -> str:
+def add_host_to_group(group_id: int, host_id: int) -> str:
     """Add a host to a group.
     
     Args:
         group_id: ID of the group
         host_id: ID of the host
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {"id": host_id}
-        response = await client.request("POST", f"/api/v2/groups/{group_id}/hosts/", data=data)
+        response = client.request("POST", f"/api/v2/groups/{group_id}/hosts/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def remove_host_from_group(group_id: int, host_id: int) -> str:
+def remove_host_from_group(group_id: int, host_id: int) -> str:
     """Remove a host from a group.
     
     Args:
         group_id: ID of the group
         host_id: ID of the host
     """
-    async with await get_ansible_client() as client:
-        await client.request("POST", f"/api/v2/groups/{group_id}/hosts/", data={"id": host_id, "disassociate": True})
+    with get_ansible_client() as client:
+        client.request("POST", f"/api/v2/groups/{group_id}/hosts/", data={"id": host_id, "disassociate": True})
         return json.dumps({"status": "success", "message": f"Host {host_id} removed from group {group_id}"})
 
 # MCP Tools - Job Template Management
 
 @mcp.tool()
-async def list_job_templates(limit: int = 100, offset: int = 0) -> str:
+def list_job_templates(limit: int = 100, offset: int = 0) -> str:
     """List all job templates.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        templates = await handle_pagination(client, "/api/v2/job_templates/", params)
+        templates = handle_pagination(client, "/api/v2/job_templates/", params)
         return json.dumps(templates, indent=2)
 
 @mcp.tool()
-async def get_job_template(template_id: int) -> str:
+def get_job_template(template_id: int) -> str:
     """Get details about a specific job template.
     
     Args:
         template_id: ID of the job template
     """
-    async with await get_ansible_client() as client:
-        template = await client.request("GET", f"/api/v2/job_templates/{template_id}/")
+    with get_ansible_client() as client:
+        template = client.request("GET", f"/api/v2/job_templates/{template_id}/")
         return json.dumps(template, indent=2)
 
 @mcp.tool()
-async def create_job_template(
+def create_job_template(
     name: str, 
     inventory_id: int,
     project_id: int,
@@ -461,7 +539,7 @@ async def create_job_template(
     except json.JSONDecodeError:
         return json.dumps({"status": "error", "message": "Invalid JSON in extra_vars"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "inventory": inventory_id,
@@ -476,11 +554,11 @@ async def create_job_template(
         if credential_id:
             data["credential"] = credential_id
             
-        response = await client.request("POST", "/api/v2/job_templates/", data=data)
+        response = client.request("POST", "/api/v2/job_templates/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_job_template(
+def update_job_template(
     template_id: int,
     name: str = None,
     inventory_id: int = None,
@@ -505,7 +583,7 @@ async def update_job_template(
         except json.JSONDecodeError:
             return json.dumps({"status": "error", "message": "Invalid JSON in extra_vars"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
@@ -518,22 +596,22 @@ async def update_job_template(
         if extra_vars:
             data["extra_vars"] = extra_vars
             
-        response = await client.request("PATCH", f"/api/v2/job_templates/{template_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/job_templates/{template_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_job_template(template_id: int) -> str:
+def delete_job_template(template_id: int) -> str:
     """Delete a job template.
     
     Args:
         template_id: ID of the job template
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/job_templates/{template_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/job_templates/{template_id}/")
         return json.dumps({"status": "success", "message": f"Job template {template_id} deleted"})
 
 @mcp.tool()
-async def launch_job(template_id: int, extra_vars: str = None) -> str:
+def launch_job(template_id: int, extra_vars: str = None) -> str:
     """Launch a job from a job template.
     
     Args:
@@ -547,18 +625,18 @@ async def launch_job(template_id: int, extra_vars: str = None) -> str:
         except json.JSONDecodeError:
             return json.dumps({"status": "error", "message": "Invalid JSON in extra_vars"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if extra_vars:
             data["extra_vars"] = extra_vars
             
-        response = await client.request("POST", f"/api/v2/job_templates/{template_id}/launch/", data=data)
+        response = client.request("POST", f"/api/v2/job_templates/{template_id}/launch/", data=data)
         return json.dumps(response, indent=2)
 
 # MCP Tools - Job Management
 
 @mcp.tool()
-async def list_jobs(status: str = None, limit: int = 100, offset: int = 0) -> str:
+def list_jobs(status: str = None, limit: int = 100, offset: int = 0) -> str:
     """List all jobs, optionally filtered by status.
     
     Args:
@@ -566,38 +644,38 @@ async def list_jobs(status: str = None, limit: int = 100, offset: int = 0) -> st
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
             
-        jobs = await handle_pagination(client, "/api/v2/jobs/", params)
+        jobs = handle_pagination(client, "/api/v2/jobs/", params)
         return json.dumps(jobs, indent=2)
 
 @mcp.tool()
-async def get_job(job_id: int) -> str:
+def get_job(job_id: int) -> str:
     """Get details about a specific job.
     
     Args:
         job_id: ID of the job
     """
-    async with await get_ansible_client() as client:
-        job = await client.request("GET", f"/api/v2/jobs/{job_id}/")
+    with get_ansible_client() as client:
+        job = client.request("GET", f"/api/v2/jobs/{job_id}/")
         return json.dumps(job, indent=2)
 
 @mcp.tool()
-async def cancel_job(job_id: int) -> str:
+def cancel_job(job_id: int) -> str:
     """Cancel a running job.
     
     Args:
         job_id: ID of the job
     """
-    async with await get_ansible_client() as client:
-        response = await client.request("POST", f"/api/v2/jobs/{job_id}/cancel/")
+    with get_ansible_client() as client:
+        response = client.request("POST", f"/api/v2/jobs/{job_id}/cancel/")
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def get_job_events(job_id: int, limit: int = 100, offset: int = 0) -> str:
+def get_job_events(job_id: int, limit: int = 100, offset: int = 0) -> str:
     """Get events for a specific job.
     
     Args:
@@ -605,59 +683,56 @@ async def get_job_events(job_id: int, limit: int = 100, offset: int = 0) -> str:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        events = await handle_pagination(client, f"/api/v2/jobs/{job_id}/job_events/", params)
+        events = handle_pagination(client, f"/api/v2/jobs/{job_id}/job_events/", params)
         return json.dumps(events, indent=2)
 
 @mcp.tool()
-async def get_job_stdout(job_id: int, format: str = "txt") -> str:
-    """Get the standard output of a job.
-    
-    Args:
-        job_id: ID of the job
-        format: Output format (txt, html, json, ansi)
-    """
+def get_job_stdout(job_id: int, format: str = "txt") -> str:
+    """Get the standard output of a job."""
     if format not in ["txt", "html", "json", "ansi"]:
-        return json.dumps({"status": "error", "message": "Invalid format. Must be one of: txt, html, json, ansi"})
+        return json.dumps({"status": "error", "message": "Invalid format"})
     
-    async with await get_ansible_client() as client:
-        response = await client.request("GET", f"/api/v2/jobs/{job_id}/stdout/?format={format}")
-        
-        if format == "json":
-            return json.dumps(response, indent=2)
+    with get_ansible_client() as client:
+        # Use .session.get() directly for non-JSON responses
+        if format != "json":
+            url = f"{client.base_url}/api/v2/jobs/{job_id}/stdout/?format={format}"
+            response = client.session.get(url, headers=client.get_headers())
+            return json.dumps({"status": "success", "stdout": response.text})
         else:
-            # For non-JSON responses, include the content directly
-            return json.dumps({"status": "success", "stdout": response}, indent=2)
+            # Only use request() for JSON responses
+            response = client.request("GET", f"/api/v2/jobs/{job_id}/stdout/?format={format}")
+            return json.dumps(response, indent=2)
 
 # MCP Tools - Project Management
 
 @mcp.tool()
-async def list_projects(limit: int = 100, offset: int = 0) -> str:
+def list_projects(limit: int = 100, offset: int = 0) -> str:
     """List all projects.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        projects = await handle_pagination(client, "/api/v2/projects/", params)
+        projects = handle_pagination(client, "/api/v2/projects/", params)
         return json.dumps(projects, indent=2)
 
 @mcp.tool()
-async def get_project(project_id: int) -> str:
+def get_project(project_id: int) -> str:
     """Get details about a specific project.
     
     Args:
         project_id: ID of the project
     """
-    async with await get_ansible_client() as client:
-        project = await client.request("GET", f"/api/v2/projects/{project_id}/")
+    with get_ansible_client() as client:
+        project = client.request("GET", f"/api/v2/projects/{project_id}/")
         return json.dumps(project, indent=2)
 
 @mcp.tool()
-async def create_project(
+def create_project(
     name: str,
     organization_id: int,
     scm_type: str,
@@ -683,7 +758,7 @@ async def create_project(
     if scm_type != "manual" and not scm_url:
         return json.dumps({"status": "error", "message": "SCM URL is required for non-manual SCM types"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "organization": organization_id,
@@ -698,11 +773,11 @@ async def create_project(
         if credential_id:
             data["credential"] = credential_id
             
-        response = await client.request("POST", "/api/v2/projects/", data=data)
+        response = client.request("POST", "/api/v2/projects/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_project(
+def update_project(
     project_id: int,
     name: str = None,
     scm_type: str = None,
@@ -723,7 +798,7 @@ async def update_project(
     if scm_type and scm_type not in ["", "git", "hg", "svn", "manual"]:
         return json.dumps({"status": "error", "message": "Invalid SCM type. Must be one of: git, hg, svn, manual"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
@@ -736,72 +811,72 @@ async def update_project(
         if description:
             data["description"] = description
             
-        response = await client.request("PATCH", f"/api/v2/projects/{project_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/projects/{project_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_project(project_id: int) -> str:
+def delete_project(project_id: int) -> str:
     """Delete a project.
     
     Args:
         project_id: ID of the project
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/projects/{project_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/projects/{project_id}/")
         return json.dumps({"status": "success", "message": f"Project {project_id} deleted"})
 
 @mcp.tool()
-async def sync_project(project_id: int) -> str:
+def sync_project(project_id: int) -> str:
     """Sync a project with its SCM source.
     
     Args:
         project_id: ID of the project
     """
-    async with await get_ansible_client() as client:
-        response = await client.request("POST", f"/api/v2/projects/{project_id}/update/")
+    with get_ansible_client() as client:
+        response = client.request("POST", f"/api/v2/projects/{project_id}/update/")
         return json.dumps(response, indent=2)
 
 # MCP Tools - Credential Management
 
 @mcp.tool()
-async def list_credentials(limit: int = 100, offset: int = 0) -> str:
+def list_credentials(limit: int = 100, offset: int = 0) -> str:
     """List all credentials.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        credentials = await handle_pagination(client, "/api/v2/credentials/", params)
+        credentials = handle_pagination(client, "/api/v2/credentials/", params)
         return json.dumps(credentials, indent=2)
 
 @mcp.tool()
-async def get_credential(credential_id: int) -> str:
+def get_credential(credential_id: int) -> str:
     """Get details about a specific credential.
     
     Args:
         credential_id: ID of the credential
     """
-    async with await get_ansible_client() as client:
-        credential = await client.request("GET", f"/api/v2/credentials/{credential_id}/")
+    with get_ansible_client() as client:
+        credential = client.request("GET", f"/api/v2/credentials/{credential_id}/")
         return json.dumps(credential, indent=2)
 
 @mcp.tool()
-async def list_credential_types(limit: int = 100, offset: int = 0) -> str:
+def list_credential_types(limit: int = 100, offset: int = 0) -> str:
     """List all credential types.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        credential_types = await handle_pagination(client, "/api/v2/credential_types/", params)
+        credential_types = handle_pagination(client, "/api/v2/credential_types/", params)
         return json.dumps(credential_types, indent=2)
 
 @mcp.tool()
-async def create_credential(
+def create_credential(
     name: str,
     credential_type_id: int,
     organization_id: int,
@@ -823,7 +898,7 @@ async def create_credential(
     except json.JSONDecodeError:
         return json.dumps({"status": "error", "message": "Invalid JSON in inputs"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "credential_type": credential_type_id,
@@ -832,11 +907,11 @@ async def create_credential(
             "description": description
         }
             
-        response = await client.request("POST", "/api/v2/credentials/", data=data)
+        response = client.request("POST", "/api/v2/credentials/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_credential(
+def update_credential(
     credential_id: int,
     name: str = None,
     inputs: str = None,
@@ -857,7 +932,7 @@ async def update_credential(
         except json.JSONDecodeError:
             return json.dumps({"status": "error", "message": "Invalid JSON in inputs"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
@@ -866,64 +941,64 @@ async def update_credential(
         if description:
             data["description"] = description
             
-        response = await client.request("PATCH", f"/api/v2/credentials/{credential_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/credentials/{credential_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_credential(credential_id: int) -> str:
+def delete_credential(credential_id: int) -> str:
     """Delete a credential.
     
     Args:
         credential_id: ID of the credential
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/credentials/{credential_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/credentials/{credential_id}/")
         return json.dumps({"status": "success", "message": f"Credential {credential_id} deleted"})
 
 # MCP Tools - Organization Management
 
 @mcp.tool()
-async def list_organizations(limit: int = 100, offset: int = 0) -> str:
+def list_organizations(limit: int = 100, offset: int = 0) -> str:
     """List all organizations.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        organizations = await handle_pagination(client, "/api/v2/organizations/", params)
+        organizations = handle_pagination(client, "/api/v2/organizations/", params)
         return json.dumps(organizations, indent=2)
 
 @mcp.tool()
-async def get_organization(organization_id: int) -> str:
+def get_organization(organization_id: int) -> str:
     """Get details about a specific organization.
     
     Args:
         organization_id: ID of the organization
     """
-    async with await get_ansible_client() as client:
-        organization = await client.request("GET", f"/api/v2/organizations/{organization_id}/")
+    with get_ansible_client() as client:
+        organization = client.request("GET", f"/api/v2/organizations/{organization_id}/")
         return json.dumps(organization, indent=2)
 
 @mcp.tool()
-async def create_organization(name: str, description: str = "") -> str:
+def create_organization(name: str, description: str = "") -> str:
     """Create a new organization.
     
     Args:
         name: Name of the organization
         description: Description of the organization
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "description": description
         }
-        response = await client.request("POST", "/api/v2/organizations/", data=data)
+        response = client.request("POST", "/api/v2/organizations/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_organization(organization_id: int, name: str = None, description: str = None) -> str:
+def update_organization(organization_id: int, name: str = None, description: str = None) -> str:
     """Update an existing organization.
     
     Args:
@@ -931,31 +1006,31 @@ async def update_organization(organization_id: int, name: str = None, descriptio
         name: New name for the organization
         description: New description
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
         if description:
             data["description"] = description
             
-        response = await client.request("PATCH", f"/api/v2/organizations/{organization_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/organizations/{organization_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_organization(organization_id: int) -> str:
+def delete_organization(organization_id: int) -> str:
     """Delete an organization.
     
     Args:
         organization_id: ID of the organization
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/organizations/{organization_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/organizations/{organization_id}/")
         return json.dumps({"status": "success", "message": f"Organization {organization_id} deleted"})
 
 # MCP Tools - Team Management
 
 @mcp.tool()
-async def list_teams(organization_id: int = None, limit: int = 100, offset: int = 0) -> str:
+def list_teams(organization_id: int = None, limit: int = 100, offset: int = 0) -> str:
     """List teams, optionally filtered by organization.
     
     Args:
@@ -963,7 +1038,7 @@ async def list_teams(organization_id: int = None, limit: int = 100, offset: int 
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
         
         if organization_id:
@@ -971,22 +1046,22 @@ async def list_teams(organization_id: int = None, limit: int = 100, offset: int 
         else:
             endpoint = "/api/v2/teams/"
             
-        teams = await handle_pagination(client, endpoint, params)
+        teams = handle_pagination(client, endpoint, params)
         return json.dumps(teams, indent=2)
 
 @mcp.tool()
-async def get_team(team_id: int) -> str:
+def get_team(team_id: int) -> str:
     """Get details about a specific team.
     
     Args:
         team_id: ID of the team
     """
-    async with await get_ansible_client() as client:
-        team = await client.request("GET", f"/api/v2/teams/{team_id}/")
+    with get_ansible_client() as client:
+        team = client.request("GET", f"/api/v2/teams/{team_id}/")
         return json.dumps(team, indent=2)
 
 @mcp.tool()
-async def create_team(name: str, organization_id: int, description: str = "") -> str:
+def create_team(name: str, organization_id: int, description: str = "") -> str:
     """Create a new team.
     
     Args:
@@ -994,17 +1069,17 @@ async def create_team(name: str, organization_id: int, description: str = "") ->
         organization_id: ID of the organization
         description: Description of the team
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "organization": organization_id,
             "description": description
         }
-        response = await client.request("POST", "/api/v2/teams/", data=data)
+        response = client.request("POST", "/api/v2/teams/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_team(team_id: int, name: str = None, description: str = None) -> str:
+def update_team(team_id: int, name: str = None, description: str = None) -> str:
     """Update an existing team.
     
     Args:
@@ -1012,55 +1087,55 @@ async def update_team(team_id: int, name: str = None, description: str = None) -
         name: New name for the team
         description: New description
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
         if description:
             data["description"] = description
             
-        response = await client.request("PATCH", f"/api/v2/teams/{team_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/teams/{team_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_team(team_id: int) -> str:
+def delete_team(team_id: int) -> str:
     """Delete a team.
     
     Args:
         team_id: ID of the team
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/teams/{team_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/teams/{team_id}/")
         return json.dumps({"status": "success", "message": f"Team {team_id} deleted"})
 
 # MCP Tools - User Management
 
 @mcp.tool()
-async def list_users(limit: int = 100, offset: int = 0) -> str:
+def list_users(limit: int = 100, offset: int = 0) -> str:
     """List all users.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        users = await handle_pagination(client, "/api/v2/users/", params)
+        users = handle_pagination(client, "/api/v2/users/", params)
         return json.dumps(users, indent=2)
 
 @mcp.tool()
-async def get_user(user_id: int) -> str:
+def get_user(user_id: int) -> str:
     """Get details about a specific user.
     
     Args:
         user_id: ID of the user
     """
-    async with await get_ansible_client() as client:
-        user = await client.request("GET", f"/api/v2/users/{user_id}/")
+    with get_ansible_client() as client:
+        user = client.request("GET", f"/api/v2/users/{user_id}/")
         return json.dumps(user, indent=2)
 
 @mcp.tool()
-async def create_user(
+def create_user(
     username: str,
     password: str,
     first_name: str = "",
@@ -1080,7 +1155,7 @@ async def create_user(
         is_superuser: Whether the user should be a superuser
         is_system_auditor: Whether the user should be a system auditor
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "username": username,
             "password": password,
@@ -1090,11 +1165,11 @@ async def create_user(
             "is_superuser": is_superuser,
             "is_system_auditor": is_system_auditor
         }
-        response = await client.request("POST", "/api/v2/users/", data=data)
+        response = client.request("POST", "/api/v2/users/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_user(
+def update_user(
     user_id: int,
     username: str = None,
     password: str = None,
@@ -1116,7 +1191,7 @@ async def update_user(
         is_superuser: Whether the user should be a superuser
         is_system_auditor: Whether the user should be a system auditor
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if username:
             data["username"] = username
@@ -1133,24 +1208,24 @@ async def update_user(
         if is_system_auditor is not None:
             data["is_system_auditor"] = is_system_auditor
             
-        response = await client.request("PATCH", f"/api/v2/users/{user_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/users/{user_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_user(user_id: int) -> str:
+def delete_user(user_id: int) -> str:
     """Delete a user.
     
     Args:
         user_id: ID of the user
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/users/{user_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/users/{user_id}/")
         return json.dumps({"status": "success", "message": f"User {user_id} deleted"})
 
 # MCP Tools - Ad Hoc Commands
 
 @mcp.tool()
-async def run_ad_hoc_command(
+def run_ad_hoc_command(
     inventory_id: int,
     credential_id: int,
     module_name: str,
@@ -1171,7 +1246,7 @@ async def run_ad_hoc_command(
     if verbosity not in range(5):
         return json.dumps({"status": "error", "message": "Verbosity must be between 0 and 4"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "inventory": inventory_id,
             "credential": credential_id,
@@ -1183,59 +1258,70 @@ async def run_ad_hoc_command(
         if limit:
             data["limit"] = limit
             
-        response = await client.request("POST", "/api/v2/ad_hoc_commands/", data=data)
+        response = client.request("POST", "/api/v2/ad_hoc_commands/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def get_ad_hoc_command(command_id: int) -> str:
+def get_ad_hoc_command(command_id: int) -> str:
     """Get details about a specific ad hoc command.
     
     Args:
         command_id: ID of the ad hoc command
     """
-    async with await get_ansible_client() as client:
-        command = await client.request("GET", f"/api/v2/ad_hoc_commands/{command_id}/")
+    with get_ansible_client() as client:
+        command = client.request("GET", f"/api/v2/ad_hoc_commands/{command_id}/")
         return json.dumps(command, indent=2)
 
 @mcp.tool()
-async def cancel_ad_hoc_command(command_id: int) -> str:
-    """Cancel a running ad hoc command.
-    
-    Args:
-        command_id: ID of the ad hoc command
-    """
-    async with await get_ansible_client() as client:
-        response = await client.request("POST", f"/api/v2/ad_hoc_commands/{command_id}/cancel/")
-        return json.dumps(response, indent=2)
+def cancel_ad_hoc_command(command_id: int) -> str:
+    """Cancel a running ad hoc command."""
+    with get_ansible_client() as client:
+        # Try with a different endpoint structure
+        try:
+            response = client.request("POST", f"/api/v2/ad_hoc_commands/{command_id}/cancel/")
+            return json.dumps(response, indent=2)
+        except Exception as e:
+            # If that fails, try DELETE method as an alternative
+            try:
+                response = client.request("GET", f"/api/v2/ad_hoc_commands/{command_id}/")
+                status = response.get("status")
+                
+                if status in ["pending", "waiting", "running"]:
+                    client.request("DELETE", f"/api/v2/ad_hoc_commands/{command_id}/")
+                    return json.dumps({"status": "success", "message": f"Ad hoc command {command_id} cancelled via DELETE"})
+                else:
+                    return json.dumps({"status": "error", "message": f"Cannot cancel command in status: {status}"})
+            except Exception as inner_e:
+                return json.dumps({"status": "error", "message": f"Failed both cancel methods: {str(e)}, then: {str(inner_e)}"})
 
 # MCP Tools - Workflow Templates
 
 @mcp.tool()
-async def list_workflow_templates(limit: int = 100, offset: int = 0) -> str:
+def list_workflow_templates(limit: int = 100, offset: int = 0) -> str:
     """List all workflow templates.
     
     Args:
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
-        templates = await handle_pagination(client, "/api/v2/workflow_job_templates/", params)
+        templates = handle_pagination(client, "/api/v2/workflow_job_templates/", params)
         return json.dumps(templates, indent=2)
 
 @mcp.tool()
-async def get_workflow_template(template_id: int) -> str:
+def get_workflow_template(template_id: int) -> str:
     """Get details about a specific workflow template.
     
     Args:
         template_id: ID of the workflow template
     """
-    async with await get_ansible_client() as client:
-        template = await client.request("GET", f"/api/v2/workflow_job_templates/{template_id}/")
+    with get_ansible_client() as client:
+        template = client.request("GET", f"/api/v2/workflow_job_templates/{template_id}/")
         return json.dumps(template, indent=2)
 
 @mcp.tool()
-async def launch_workflow(template_id: int, extra_vars: str = None) -> str:
+def launch_workflow(template_id: int, extra_vars: str = None) -> str:
     """Launch a workflow from a workflow template.
     
     Args:
@@ -1249,18 +1335,18 @@ async def launch_workflow(template_id: int, extra_vars: str = None) -> str:
         except json.JSONDecodeError:
             return json.dumps({"status": "error", "message": "Invalid JSON in extra_vars"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if extra_vars:
             data["extra_vars"] = extra_vars
             
-        response = await client.request("POST", f"/api/v2/workflow_job_templates/{template_id}/launch/", data=data)
+        response = client.request("POST", f"/api/v2/workflow_job_templates/{template_id}/launch/", data=data)
         return json.dumps(response, indent=2)
 
 # MCP Tools - Workflow Jobs
 
 @mcp.tool()
-async def list_workflow_jobs(status: str = None, limit: int = 100, offset: int = 0) -> str:
+def list_workflow_jobs(status: str = None, limit: int = 100, offset: int = 0) -> str:
     """List all workflow jobs, optionally filtered by status.
     
     Args:
@@ -1268,40 +1354,40 @@ async def list_workflow_jobs(status: str = None, limit: int = 100, offset: int =
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
         if status:
             params["status"] = status
             
-        jobs = await handle_pagination(client, "/api/v2/workflow_jobs/", params)
+        jobs = handle_pagination(client, "/api/v2/workflow_jobs/", params)
         return json.dumps(jobs, indent=2)
 
 @mcp.tool()
-async def get_workflow_job(job_id: int) -> str:
+def get_workflow_job(job_id: int) -> str:
     """Get details about a specific workflow job.
     
     Args:
         job_id: ID of the workflow job
     """
-    async with await get_ansible_client() as client:
-        job = await client.request("GET", f"/api/v2/workflow_jobs/{job_id}/")
+    with get_ansible_client() as client:
+        job = client.request("GET", f"/api/v2/workflow_jobs/{job_id}/")
         return json.dumps(job, indent=2)
 
 @mcp.tool()
-async def cancel_workflow_job(job_id: int) -> str:
+def cancel_workflow_job(job_id: int) -> str:
     """Cancel a running workflow job.
     
     Args:
         job_id: ID of the workflow job
     """
-    async with await get_ansible_client() as client:
-        response = await client.request("POST", f"/api/v2/workflow_jobs/{job_id}/cancel/")
+    with get_ansible_client() as client:
+        response = client.request("POST", f"/api/v2/workflow_jobs/{job_id}/cancel/")
         return json.dumps(response, indent=2)
 
 # MCP Tools - Schedule Management
 
 @mcp.tool()
-async def list_schedules(unified_job_template_id: int = None, limit: int = 100, offset: int = 0) -> str:
+def list_schedules(unified_job_template_id: int = None, limit: int = 100, offset: int = 0) -> str:
     """List schedules, optionally filtered by job template.
     
     Args:
@@ -1309,28 +1395,28 @@ async def list_schedules(unified_job_template_id: int = None, limit: int = 100, 
         limit: Maximum number of results to return
         offset: Number of results to skip
     """
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         params = {"limit": limit, "offset": offset}
         
         if unified_job_template_id:
             params["unified_job_template"] = unified_job_template_id
             
-        schedules = await handle_pagination(client, "/api/v2/schedules/", params)
+        schedules = handle_pagination(client, "/api/v2/schedules/", params)
         return json.dumps(schedules, indent=2)
 
 @mcp.tool()
-async def get_schedule(schedule_id: int) -> str:
+def get_schedule(schedule_id: int) -> str:
     """Get details about a specific schedule.
     
     Args:
         schedule_id: ID of the schedule
     """
-    async with await get_ansible_client() as client:
-        schedule = await client.request("GET", f"/api/v2/schedules/{schedule_id}/")
+    with get_ansible_client() as client:
+        schedule = client.request("GET", f"/api/v2/schedules/{schedule_id}/")
         return json.dumps(schedule, indent=2)
 
 @mcp.tool()
-async def create_schedule(
+def create_schedule(
     name: str,
     unified_job_template_id: int,
     rrule: str,
@@ -1352,7 +1438,7 @@ async def create_schedule(
     except json.JSONDecodeError:
         return json.dumps({"status": "error", "message": "Invalid JSON in extra_data"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {
             "name": name,
             "unified_job_template": unified_job_template_id,
@@ -1361,11 +1447,11 @@ async def create_schedule(
             "extra_data": json.loads(extra_data)
         }
             
-        response = await client.request("POST", "/api/v2/schedules/", data=data)
+        response = client.request("POST", "/api/v2/schedules/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def update_schedule(
+def update_schedule(
     schedule_id: int,
     name: str = None,
     rrule: str = None,
@@ -1388,7 +1474,7 @@ async def update_schedule(
         except json.JSONDecodeError:
             return json.dumps({"status": "error", "message": "Invalid JSON in extra_data"})
     
-    async with await get_ansible_client() as client:
+    with get_ansible_client() as client:
         data = {}
         if name:
             data["name"] = name
@@ -1399,42 +1485,51 @@ async def update_schedule(
         if extra_data:
             data["extra_data"] = json.loads(extra_data)
             
-        response = await client.request("PATCH", f"/api/v2/schedules/{schedule_id}/", data=data)
+        response = client.request("PATCH", f"/api/v2/schedules/{schedule_id}/", data=data)
         return json.dumps(response, indent=2)
 
 @mcp.tool()
-async def delete_schedule(schedule_id: int) -> str:
+def delete_schedule(schedule_id: int) -> str:
     """Delete a schedule.
     
     Args:
         schedule_id: ID of the schedule
     """
-    async with await get_ansible_client() as client:
-        await client.request("DELETE", f"/api/v2/schedules/{schedule_id}/")
+    with get_ansible_client() as client:
+        client.request("DELETE", f"/api/v2/schedules/{schedule_id}/")
         return json.dumps({"status": "success", "message": f"Schedule {schedule_id} deleted"})
 
 # MCP Tools - System Information
 
 @mcp.tool()
-async def get_ansible_version() -> str:
+def get_ansible_version() -> str:
     """Get Ansible Tower/AWX version information."""
-    async with await get_ansible_client() as client:
-        info = await client.request("GET", "/api/v2/ping/")
+    with get_ansible_client() as client:
+        info = client.request("GET", "/api/v2/ping/")
         return json.dumps(info, indent=2)
 
 @mcp.tool()
-async def get_dashboard_stats() -> str:
+def get_dashboard_stats() -> str:
     """Get dashboard statistics."""
-    async with await get_ansible_client() as client:
-        stats = await client.request("GET", "/api/v2/dashboard/")
+    with get_ansible_client() as client:
+        stats = client.request("GET", "/api/v2/dashboard/")
         return json.dumps(stats, indent=2)
 
 @mcp.tool()
-async def get_metrics() -> str:
+def get_metrics() -> str:
     """Get system metrics."""
-    async with await get_ansible_client() as client:
-        metrics = await client.request("GET", "/api/v2/metrics/")
-        return json.dumps(metrics, indent=2)
+    with get_ansible_client() as client:
+        try:
+            metrics = client.request("GET", "/api/v2/metrics/")
+            return json.dumps(metrics, indent=2)
+        except Exception as e:
+            # Try to get raw response
+            url = f"{client.base_url}/api/v2/metrics/"
+            response = client.session.get(url, headers=client.get_headers())
+            if response.status_code < 400:
+                return json.dumps({"status": "success", "raw_data": response.text[:1000]})
+            else:
+                return json.dumps({"status": "error", "message": str(e)})
 
 # Main entry point
 if __name__ == "__main__":
