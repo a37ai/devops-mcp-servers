@@ -961,16 +961,14 @@ def delete_credential(credential_id: int) -> str:
 # MCP Tools - Organization Management
 
 @mcp.tool()
-def list_organizations(limit: int = 100, offset: int = 0) -> str:
+def list_organizations() -> str:
     """List all organizations.
     
     Args:
-        limit: Maximum number of results to return
-        offset: Number of results to skip
+        none
     """
     with get_ansible_client() as client:
-        params = {"limit": limit, "offset": offset}
-        organizations = handle_pagination(client, "/api/v2/organizations/", params)
+        organizations = handle_pagination(client, "/api/v2/organizations/", {})
         return json.dumps(organizations, indent=2)
 
 @mcp.tool()
