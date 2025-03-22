@@ -1,2 +1,4 @@
 .venv
 .env
+test.py
+test.sh
