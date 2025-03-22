@@ -40,7 +40,7 @@ Most servers require API credentials or tokens to interact with their respective
 - Python 3.7+
 - FastMCP framework 
 - Service-specific API tokens or credentials
-- Required Python packages (specified in each server's documentation)
+- Required Python packages (install the requirements.txt)
 
 ## 📚 Resources
 

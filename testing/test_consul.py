@@ -1,275 +1,276 @@
-#!/usr/bin/env python3
-"""
-MCP Server Test Script
-----------------------
-This script tests all tools and functionalities of the MCP server
-using the provided Consul credentials.
-"""
-
+import pytest
+import os
 import json
-import time
-import sys
-from servers.consul.consul_mcp import *
-from consul import Consul
+import asyncio
+import base64
+from dotenv import load_dotenv
 
-# Consul credentials
-CONSUL_URL = ""
-CONSUL_TOKEN = ""
+# Load environment variables from .env file
+load_dotenv()
 
-CONSUL_HOST = None
-CONSUL_PORT = None
+import servers.consul.consul_mcp as consul_mcp   
 
-def setup_consul_client():
-    """Initialize the Consul client with the provided credentials."""
-    try:
-        client = Consul(host=CONSUL_HOST, port=CONSUL_PORT, token=CONSUL_TOKEN)
-        print("✅ Successfully connected to Consul")
-        return client
-    except Exception as e:
-        print(f"❌ Failed to connect to Consul: {str(e)}")
-        sys.exit(1)
+# Pytest fixture for asyncio support
+@pytest.fixture
+def event_loop():
+    """Provide an event loop for asyncio tests."""
+    loop = asyncio.get_event_loop()
+    yield loop
 
-def test_kv_operations(client):
-    """Test Key-Value store operations."""
-    print("\n🔍 Testing Key-Value Operations...")
-    
-    test_key = "test/mcp/key"
-    test_value = json.dumps({"timestamp": time.time(), "message": "MCP test value"})
-    
-    # Put operation
-    try:
-        success = client.kv.put(test_key, test_value)
-        if success:
-            print(f"✅ Successfully put value at key: {test_key}")
-        else:
-            print(f"❌ Failed to put value at key: {test_key}")
-    except Exception as e:
-        print(f"❌ Exception during KV put: {str(e)}")
-    
-    # Get operation
-    try:
-        index, data = client.kv.get(test_key)
-        if data and data['Value']:
-            retrieved_value = data['Value'].decode('utf-8')
-            print(f"✅ Successfully retrieved value from key: {test_key}")
-            print(f"   Value: {retrieved_value}")
-        else:
-            print(f"❌ Failed to retrieve value from key: {test_key}")
-    except Exception as e:
-        print(f"❌ Exception during KV get: {str(e)}")
-    
-    # List operation
-    try:
-        index, data = client.kv.get("test/mcp", recurse=True)
-        print(f"✅ Successfully listed keys under 'test/mcp'")
-        if data:
-            for item in data:
-                print(f"   - {item['Key']}")
-    except Exception as e:
-        print(f"❌ Exception during KV list: {str(e)}")
-    
-    # Delete operation
-    try:
-        success = client.kv.delete(test_key)
-        if success:
-            print(f"✅ Successfully deleted key: {test_key}")
-        else:
-            print(f"❌ Failed to delete key: {test_key}")
-    except Exception as e:
-        print(f"❌ Exception during KV delete: {str(e)}")
-
-def test_catalog_operations(client):
-    """Test Catalog operations."""
-    print("\n🔍 Testing Catalog Operations...")
-    
-    # List datacenters
-    try:
-        datacenters = client.catalog.datacenters()
-        print(f"✅ Successfully retrieved datacenters:")
-        for dc in datacenters:
-            print(f"   - {dc}")
-    except Exception as e:
-        print(f"❌ Exception during catalog datacenters: {str(e)}")
-    
-    # List nodes
-    try:
-        index, nodes = client.catalog.nodes()
-        print(f"✅ Successfully retrieved nodes:")
-        for node in nodes:
-            print(f"   - {node['Node']} ({node['Address']})")
-    except Exception as e:
-        print(f"❌ Exception during catalog nodes: {str(e)}")
-    
-    # List services
-    try:
-        index, services = client.catalog.services()
-        print(f"✅ Successfully retrieved services:")
-        for service_name, tags in services.items():
-            print(f"   - {service_name} (Tags: {', '.join(tags) if tags else 'None'})")
-    except Exception as e:
-        print(f"❌ Exception during catalog services: {str(e)}")
-
-def test_health_operations(client):
-    """Test Health check operations."""
-    print("\n🔍 Testing Health Check Operations...")
-    
-    # List all checks
-    try:
-        index, checks = client.health.state("any")
-        print(f"✅ Successfully retrieved all health checks:")
-        for check in checks:
-            print(f"   - {check['CheckID']}: {check['Status']} for {check['ServiceName'] or 'Node'}")
-    except Exception as e:
-        print(f"❌ Exception during health state: {str(e)}")
-    
-    # Get service health
-    # First get a service name from the catalog
-    try:
-        index, services = client.catalog.services()
-        if services:
-            service_name = list(services.keys())[0]
-            index, service_checks = client.health.service(service_name)
-            print(f"✅ Successfully retrieved health for service '{service_name}':")
-            for entry in service_checks:
-                node = entry["Node"]["Node"]
-                for check in entry["Checks"]:
-                    print(f"   - [{check['Status']}] {check['CheckID']} on {node}")
-    except Exception as e:
-        print(f"❌ Exception during health service: {str(e)}")
-
-def test_agent_operations(client):
-    """Test Agent operations."""
-    print("\n🔍 Testing Agent Operations...")
-    
-    # Get agent info
-    try:
-        agent_info = client.agent.self()
-        print("✅ Successfully retrieved agent information:")
-        print(f"   - Node name: {agent_info['Config']['NodeName']}")
-        print(f"   - Datacenter: {agent_info['Config']['Datacenter']}")
-        print(f"   - Version: {agent_info['Config']['Version']}")
-    except Exception as e:
-        print(f"❌ Exception during agent self: {str(e)}")
-    
-    # List members
-    try:
-        members = client.agent.members()
-        print("✅ Successfully retrieved agent members:")
-        for member in members:
-            print(f"   - {member['Name']} ({member['Addr']}:{member['Port']})")
-    except Exception as e:
-        print(f"❌ Exception during agent members: {str(e)}")
-    
-    # Get local services
-    try:
-        services = client.agent.services()
-        print("✅ Successfully retrieved local services:")
-        for service_id, service in services.items():
-            print(f"   - {service['Service']} (ID: {service_id})")
-    except Exception as e:
-        print(f"❌ Exception during agent services: {str(e)}")
-    
-    # Get local checks
-    try:
-        checks = client.agent.checks()
-        print("✅ Successfully retrieved local checks:")
-        for check_id, check in checks.items():
-            print(f"   - {check['Name']} (ID: {check_id}, Status: {check['Status']})")
-    except Exception as e:
-        print(f"❌ Exception during agent checks: {str(e)}")
-
-def test_session_operations(client):
-    """Test Session operations."""
-    print("\n🔍 Testing Session Operations...")
-    
-    # Create a session
-    session_id = None
-    try:
-        session_id = client.session.create(name="mcp-test-session", ttl="10s")
-        print(f"✅ Successfully created session: {session_id}")
-    except Exception as e:
-        print(f"❌ Exception during session create: {str(e)}")
-    
-    if session_id:
-        # Info on session
+# Helper function to run tool functions and parse results
+async def run_tool(tool_func, **kwargs):
+    """Run a tool function and parse its JSON result."""
+    result = await tool_func(**kwargs)
+    if isinstance(result, str):
         try:
-            index, session_info = client.session.info(session_id)
-            print("✅ Successfully retrieved session info:")
-            print(f"   - Name: {session_info['Name']}")
-            print(f"   - TTL: {session_info['TTL']}")
-            print(f"   - Node: {session_info['Node']}")
-        except Exception as e:
-            print(f"❌ Exception during session info: {str(e)}")
+            return json.loads(result)
+        except json.JSONDecodeError:
+            # For raw values that aren't JSON
+            return result
+    return result
+
+# Mark all tests as asyncio
+pytestmark = pytest.mark.asyncio
+
+class TestConsulMCPServer:
+    """Test suite for Consul MCP Server."""
+
+    # 1. Test list_datacenters
+    async def test_list_datacenters(self):
+        """Test listing datacenters."""
+        result = await run_tool(consul_mcp.list_datacenters)
+        assert isinstance(result, list), "Should return a list of datacenters"
+        # At least one datacenter should exist
+        assert len(result) > 0, "Should have at least one datacenter"
+
+    # 2. Test list_nodes
+    async def test_list_nodes(self):
+        """Test listing nodes."""
+        result = await run_tool(consul_mcp.list_nodes)
+        assert isinstance(result, list), "Should return a list of nodes"
+        assert len(result) > 0, "Should have at least one node"
         
-        # List sessions
-        try:
-            index, sessions = client.session.list()
-            print("✅ Successfully listed all sessions:")
-            for session in sessions:
-                print(f"   - {session['ID']} ({session['Name']})")
-        except Exception as e:
-            print(f"❌ Exception during session list: {str(e)}")
-        
-        # Renew session
-        try:
-            session_info = client.session.renew(session_id)
-            print(f"✅ Successfully renewed session: {session_id}")
-        except Exception as e:
-            print(f"❌ Exception during session renew: {str(e)}")
-        
-        # Destroy session
-        try:
-            success = client.session.destroy(session_id)
-            if success:
-                print(f"✅ Successfully destroyed session: {session_id}")
-            else:
-                print(f"❌ Failed to destroy session: {session_id}")
-        except Exception as e:
-            print(f"❌ Exception during session destroy: {str(e)}")
+        # Test filtering if we have nodes
+        if len(result) > 0:
+            node_name = result[0]["Node"]
+            filter_expr = f'Node.Node == "{node_name}"'
+            filtered = await run_tool(consul_mcp.list_nodes, filter=filter_expr)
+            assert len(filtered) == 1, "Filter should return exactly one node"
+            assert filtered[0]["Node"] == node_name, "Filtered node should match"
 
-def test_acl_operations(client):
-    """Test ACL operations."""
-    print("\n🔍 Testing ACL Operations...")
-    
-    # Get self token info
-    try:
-        token_info = client.acl.info(CONSUL_TOKEN)
-        if token_info:
-            print("✅ Successfully retrieved token info:")
-            print(f"   - ID: {token_info['ID']}")
-            if 'Name' in token_info:
-                print(f"   - Name: {token_info['Name']}")
-            if 'Policies' in token_info:
-                print(f"   - Policies: {', '.join([p['Name'] for p in token_info['Policies']])}")
+    # 3. Test list_services
+    async def test_list_services(self):
+        """Test listing services."""
+        result = await run_tool(consul_mcp.list_services)
+        assert isinstance(result, dict), "Should return a dictionary of services"
+        # Consul service should always be present
+        assert "consul" in result, "Should include the consul service"
+
+    # 4 & 5. Test register_service and deregister_service
+    async def test_register_deregister_service(self):
+        """Test registering and deregistering a service."""
+        # Get a node to register the service on
+        nodes = await run_tool(consul_mcp.list_nodes)
+        assert len(nodes) > 0, "Need at least one node to register a service"
+        
+        node_name = nodes[0]["Node"]
+        service_name = f"test-service-{os.getpid()}"  # Make it unique
+        service_id = f"test-id-{os.getpid()}"
+        
+        try:
+            # Register service
+            register_result = await run_tool(
+                consul_mcp.register_service,
+                name=service_name,
+                id=service_id,
+                address="127.0.0.1", 
+                port=8080,
+                tags="test,pytest",
+                meta=json.dumps({"environment": "testing"})
+            )
+            
+            assert register_result["success"], "Service registration should succeed"
+            
+            # Verify service is registered
+            services = await run_tool(consul_mcp.list_services)
+            assert service_name in services, f"Service {service_name} should be in services list"
+            
+            # Test health check for this service
+            health_data = await run_tool(consul_mcp.health_service, service=service_name)
+            assert isinstance(health_data, list), "Should return health data for the service"
+            
+            # Find our service in the health data
+            service_found = False
+            for entry in health_data:
+                if entry["Service"]["ID"] == service_id:
+                    service_found = True
+                    break
+            
+            assert service_found, f"Service with ID {service_id} should be found in health data"
+            
+        finally:
+            # Deregister service
+            deregister_result = await run_tool(
+                consul_mcp.deregister_service,
+                service_id=service_id,
+                node=node_name
+            )
+            
+            assert deregister_result["success"], "Service deregistration should succeed"
+
+    # 6. Test health_service
+    async def test_health_service(self):
+        """Test health service checks."""
+        # Consul service should always exist
+        result = await run_tool(consul_mcp.health_service, service="consul")
+        assert isinstance(result, list), "Should return a list of health check data"
+        assert len(result) > 0, "Should have health data for the consul service"
+        
+        # Test passing filter
+        passing = await run_tool(consul_mcp.health_service, service="consul", passing=True)
+        assert isinstance(passing, list), "Should return a list of passing health checks"
+        
+        # Verify all checks are passing
+        for entry in passing:
+            for check in entry["Checks"]:
+                assert check["Status"] == "passing", "With passing=True, all checks should be passing"
+
+    # 7. Test create_acl_token (This may require ACL system enabled)
+    async def test_create_acl_token(self):
+        """Test creating an ACL token."""
+        # Skip if we don't want to test ACL features
+        if not os.environ.get("TEST_ACL", "").lower() in ("true", "1", "yes"):
+            pytest.skip("Skipping ACL test (set TEST_ACL=true to enable)")
+            
+        result = await run_tool(
+            consul_mcp.create_acl_token,
+            description="Test token from pytest"
+        )
+        
+        # This may fail if ACLs aren't enabled or the token used doesn't have permission
+        if isinstance(result, dict) and "error" in result:
+            pytest.skip(f"ACL test failed: {result.get('message', 'Unknown error')}")
         else:
-            print("❌ Failed to retrieve token info or token not found")
-    except Exception as e:
-        print(f"❌ Exception during ACL info: {str(e)}")
-    
-    # List tokens (may require higher privileges)
-    try:
-        tokens = client.acl.list()
-        print("✅ Successfully listed ACL tokens:")
-        for token in tokens:
-            print(f"   - {token['ID']} ({token.get('Name', 'Unnamed')})")
-    except Exception as e:
-        print(f"ℹ️ ACL token listing requires management privileges: {str(e)}")
+            assert "ID" in result, "Should return a token ID"
+            assert "SecretID" in result, "Should return a secret ID"
 
-def main():
-    """Main function to run all tests."""
-    print("🚀 Starting MCP Server Test Script")
-    
-    client = setup_consul_client()
-    
-    # Run all test functions
-    test_kv_operations(client)
-    test_catalog_operations(client)
-    test_health_operations(client)
-    test_agent_operations(client)
-    test_session_operations(client)
-    test_acl_operations(client)
-    
-    print("\n✨ MCP Server Test Script Completed!")
+    # 8. Test execute_prepared_query (Requires existing queries)
+    async def test_execute_prepared_query(self):
+        """Test executing a prepared query."""
+        # Skip if we don't have a query ID to test
+        if not os.environ.get("TEST_QUERY_ID"):
+            pytest.skip("Skipping prepared query test (set TEST_QUERY_ID to enable)")
+            
+        query_id = os.environ.get("TEST_QUERY_ID")
+        result = await run_tool(consul_mcp.execute_prepared_query, query_id=query_id)
+        
+        if isinstance(result, dict) and "error" in result:
+            pytest.skip(f"Prepared query test failed: {result.get('message', 'Unknown error')}")
+        else:
+            assert "Service" in result, "Should return service information"
 
-if __name__ == "__main__":
-    main()
+    # 9. Test create_intention (Requires Connect enabled)
+    async def test_create_intention(self):
+        """Test creating a service intention."""
+        # Skip if we don't want to test intentions
+        if not os.environ.get("TEST_INTENTIONS", "").lower() in ("true", "1", "yes"):
+            pytest.skip("Skipping intentions test (set TEST_INTENTIONS=true to enable)")
+            
+        source = f"test-source-{os.getpid()}"
+        destination = f"test-dest-{os.getpid()}"
+        
+        result = await run_tool(
+            consul_mcp.create_intention,
+            source_name=source,
+            destination_name=destination,
+            action="allow",
+            description="Test intention from pytest"
+        )
+        
+        if isinstance(result, dict) and "error" in result:
+            pytest.skip(f"Intentions test failed: {result.get('message', 'Unknown error')}")
+        else:
+            assert "ID" in result, "Should return an intention ID"
+
+    # 10, 11, 12. Test KV Store Operations
+    async def test_kv_operations(self):
+        """Test KV store operations (put, get, delete)."""
+        # Create a unique test key
+        test_key = f"pytest/test-key-{os.getpid()}"
+        test_value = "test value 123"
+        
+        try:
+            # Test put
+            put_result = await run_tool(consul_mcp.kv_put, key=test_key, value=test_value)
+            assert put_result["success"], "KV put should succeed"
+            
+            # Test get
+            get_result = await run_tool(consul_mcp.kv_get, key=test_key)
+            assert "Value" in get_result, "Should return the value"
+            
+            # Decode value from base64
+            value_bytes = base64.b64decode(get_result["Value"])
+            value_str = value_bytes.decode("utf-8")
+            assert value_str == test_value, f"Value should match what was put, got: {value_str}"
+            
+            # Test get with raw=True
+            raw_result = await run_tool(consul_mcp.kv_get, key=test_key, raw=True)
+            assert raw_result == test_value, "Raw value should match what was put"
+            
+            # Test put with flags
+            flags_value = 42
+            await run_tool(consul_mcp.kv_put, key=test_key, value=test_value, flags=flags_value)
+            
+            # Get and check flags
+            get_with_flags = await run_tool(consul_mcp.kv_get, key=test_key)
+            assert get_with_flags["Flags"] == flags_value, "Flags should match what was set"
+            
+        finally:
+            # Test delete
+            delete_result = await run_tool(consul_mcp.kv_delete, key=test_key)
+            assert delete_result["success"], "KV delete should succeed"
+            
+            # Verify it's gone
+            get_after_delete = await run_tool(consul_mcp.kv_get, key=test_key)
+            assert isinstance(get_after_delete, dict) and "error" in get_after_delete, \
+                "Key should be deleted"
+    
+    async def test_kv_recursive_operations(self):
+        """Test KV store recursive operations."""
+        # Create a unique test prefix
+        test_prefix = f"pytest/recursive-{os.getpid()}"
+        
+        # Create multiple test keys
+        test_keys = [
+            f"{test_prefix}/key1",
+            f"{test_prefix}/key2",
+            f"{test_prefix}/subdir/key3",
+        ]
+        
+        test_values = ["value1", "value2", "value3"]
+        
+        try:
+            # Put multiple values
+            for key, value in zip(test_keys, test_values):
+                put_result = await run_tool(consul_mcp.kv_put, key=key, value=value)
+                assert put_result["success"], f"KV put for {key} should succeed"
+            
+            # Test recursive get
+            get_result = await run_tool(consul_mcp.kv_get, key=test_prefix, recurse=True)
+            assert isinstance(get_result, list), "Recursive get should return a list"
+            assert len(get_result) == len(test_keys), f"Should return {len(test_keys)} keys"
+            
+            # Verify each key is present
+            keys_found = [item["Key"] for item in get_result]
+            for key in test_keys:
+                assert key in keys_found, f"Key {key} should be in the result"
+            
+        finally:
+            # Test recursive delete
+            delete_result = await run_tool(consul_mcp.kv_delete, key=test_prefix, recurse=True)
+            assert delete_result["success"], "Recursive KV delete should succeed"
+            
+            # Verify they're gone
+            get_after_delete = await run_tool(consul_mcp.kv_get, key=test_prefix, recurse=True)
+            assert isinstance(get_after_delete, dict) and "error" in get_after_delete, \
+                "All keys should be deleted"

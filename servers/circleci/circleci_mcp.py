@@ -20,7 +20,7 @@ mcp = FastMCP("CircleCI")
 CIRCLECI_API_BASE = os.environ.get("CIRCLECI_API_BASE", "https://circleci.com/api/v2")
 CIRCLECI_API_KEY = os.environ.get("CIRCLECI_API_KEY")
 
-if not API_KEY:
+if not CIRCLECI_API_KEY:
     raise ValueError("CIRCLECI_API_KEY environment variable must be set")
 
 def get_headers():

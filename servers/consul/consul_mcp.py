@@ -6,10 +6,14 @@ A Model Context Protocol server that exposes Consul API functionality as tools f
 
 import os
 import json
-import httpx
+import urllib.parse
+import asyncio
+import functools
 from typing import Dict, List, Optional, Union, Any
+from consul import Consul
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Initialize the MCP server
@@ -19,37 +23,28 @@ mcp = FastMCP("consul-server")
 CONSUL_URL = os.environ.get("CONSUL_URL")
 CONSUL_TOKEN = os.environ.get("CONSUL_TOKEN")
 
-# Common headers for Consul API requests
-def get_headers():
-    headers = {"Content-Type": "application/json"}
-    if CONSUL_TOKEN:
-        headers["X-Consul-Token"] = CONSUL_TOKEN
-    return headers
+# Parse CONSUL_URL to get host and port
+def get_consul_connection_info():
+    if not CONSUL_URL:
+        return "localhost", 8500  # Default Consul values
+    
+    parsed_url = urllib.parse.urlparse(CONSUL_URL)
+    host = parsed_url.hostname or "localhost"
+    port = parsed_url.port or 8500
+    
+    return host, port
 
-# Helper function for HTTP requests
-async def make_request(method, endpoint, params=None, json_data=None):
-    url = f"{CONSUL_URL}{endpoint}"
-    async with httpx.AsyncClient() as client:
-        response = await client.request(
-            method=method,
-            url=url,
-            params=params,
-            json=json_data,
-            headers=get_headers(),
-            timeout=30.0
-        )
-        try:
-            response.raise_for_status()
-            if response.status_code == 204:  # No content
-                return {"success": True}
-            return response.json()
-        except httpx.HTTPStatusError as e:
-            return {
-                "error": True,
-                "status_code": e.response.status_code,
-                "message": str(e),
-                "details": e.response.text
-            }
+# Initialize Consul client
+def get_consul_client():
+    host, port = get_consul_connection_info()
+    return Consul(host=host, port=port, token=CONSUL_TOKEN)
+
+# Helper to run synchronous functions in a thread pool
+async def run_sync(func, *args, **kwargs):
+    loop = asyncio.get_event_loop()
+    return await loop.run_in_executor(
+        None, functools.partial(func, *args, **kwargs)
+    )
 
 # 1. List Datacenters
 @mcp.tool()
@@ -59,8 +54,13 @@ async def list_datacenters() -> str:
     
     This tool doesn't require any parameters.
     """
-    data = await make_request("GET", "/v1/catalog/datacenters")
-    return json.dumps(data, indent=2)
+    client = get_consul_client()
+    
+    async def get_datacenters():
+        return client.catalog.datacenters()
+    
+    datacenters = await run_sync(get_datacenters)
+    return json.dumps(datacenters, indent=2)
 
 # 2. List Nodes
 @mcp.tool()
@@ -73,6 +73,8 @@ async def list_nodes(dc: Optional[str] = None, near: Optional[str] = None, filte
         near: Sorts nodes by round trip time from a specified node
         filter: Filters results based on a query expression
     """
+    client = get_consul_client()
+    
     params = {}
     if dc:
         params["dc"] = dc
@@ -81,8 +83,11 @@ async def list_nodes(dc: Optional[str] = None, near: Optional[str] = None, filte
     if filter:
         params["filter"] = filter
     
-    data = await make_request("GET", "/v1/catalog/nodes", params=params)
-    return json.dumps(data, indent=2)
+    async def get_nodes():
+        return client.catalog.nodes(**params)
+    
+    index, nodes = await run_sync(get_nodes)
+    return json.dumps(nodes, indent=2)
 
 # 3. List Services
 @mcp.tool()
@@ -93,12 +98,17 @@ async def list_services(dc: Optional[str] = None) -> str:
     Args:
         dc: Specifies the datacenter to query
     """
+    client = get_consul_client()
+    
     params = {}
     if dc:
         params["dc"] = dc
     
-    data = await make_request("GET", "/v1/catalog/services", params=params)
-    return json.dumps(data, indent=2)
+    async def get_services():
+        return client.catalog.services(**params)
+    
+    index, services = await run_sync(get_services)
+    return json.dumps(services, indent=2)
 
 # 4. Register Service
 @mcp.tool()
@@ -123,6 +133,8 @@ async def register_service(
         meta: JSON string with metadata key-value pairs
         dc: Datacenter to register in
     """
+    client = get_consul_client()
+    
     service_def = {
         "Name": name
     }
@@ -141,15 +153,18 @@ async def register_service(
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid JSON in meta parameter"})
     
-    data = {
+    catalog_def = {
         "Service": service_def
     }
     
     if dc:
-        data["Datacenter"] = dc
+        catalog_def["Datacenter"] = dc
     
-    result = await make_request("PUT", "/v1/catalog/register", json_data=data)
-    return json.dumps(result, indent=2)
+    async def do_register():
+        return client.catalog.register(**catalog_def)
+    
+    result = await run_sync(do_register)
+    return json.dumps({"success": result}, indent=2)
 
 # 5. Deregister Service
 @mcp.tool()
@@ -169,16 +184,21 @@ async def deregister_service(
     if not node:
         return json.dumps({"error": "Node parameter is required for deregistration"})
     
-    data = {
-        "ServiceID": service_id,
-        "Node": node
+    client = get_consul_client()
+    
+    deregister_params = {
+        "service_id": service_id,
+        "node": node
     }
     
     if dc:
-        data["Datacenter"] = dc
+        deregister_params["dc"] = dc
     
-    result = await make_request("PUT", "/v1/catalog/deregister", json_data=data)
-    return json.dumps(result, indent=2)
+    async def do_deregister():
+        return client.catalog.deregister(**deregister_params)
+    
+    result = await run_sync(do_deregister)
+    return json.dumps({"success": result}, indent=2)
 
 # 6. Health Checking
 @mcp.tool()
@@ -199,18 +219,23 @@ async def health_service(
         near: Sorts results by round trip time from specified node
         filter: Filters results based on a query expression
     """
+    client = get_consul_client()
+    
     params = {}
     if dc:
         params["dc"] = dc
     if passing:
-        params["passing"] = "true"
+        params["passing"] = passing
     if near:
         params["near"] = near
     if filter:
         params["filter"] = filter
     
-    data = await make_request("GET", f"/v1/health/service/{service}", params=params)
-    return json.dumps(data, indent=2)
+    async def get_health():
+        return client.health.service(service, **params)
+    
+    index, health_data = await run_sync(get_health)
+    return json.dumps(health_data, indent=2)
 
 # 7. Create ACL Token
 @mcp.tool()
@@ -231,6 +256,15 @@ async def create_acl_token(
         service_identities: JSON string with service identity definitions
         expires_after: Duration after which the token expires (e.g., "24h")
     """
+    # The Python consul package may not fully support newer ACL APIs
+    # Falling back to HTTP request method for this one
+    import httpx
+    
+    url = f"{CONSUL_URL}/v1/acl/token"
+    headers = {"Content-Type": "application/json"}
+    if CONSUL_TOKEN:
+        headers["X-Consul-Token"] = CONSUL_TOKEN
+    
     token_def = {}
     
     if description:
@@ -251,8 +285,22 @@ async def create_acl_token(
     if expires_after:
         token_def["ExpirationTTL"] = expires_after
     
-    result = await make_request("PUT", "/v1/acl/token", json_data=token_def)
-    return json.dumps(result, indent=2)
+    async with httpx.AsyncClient() as http_client:
+        response = await http_client.put(
+            url,
+            json=token_def,
+            headers=headers
+        )
+        try:
+            response.raise_for_status()
+            return json.dumps(response.json(), indent=2)
+        except httpx.HTTPStatusError as e:
+            return json.dumps({
+                "error": True,
+                "status_code": e.response.status_code,
+                "message": str(e),
+                "details": e.response.text
+            }, indent=2)
 
 # 8. Query Prepared Queries
 @mcp.tool()
@@ -267,12 +315,35 @@ async def execute_prepared_query(
         query_id: ID of the prepared query to execute
         dc: Datacenter to query
     """
+    # The Python consul package may not support prepared queries API
+    # Falling back to HTTP request method for this one
+    import httpx
+    
+    url = f"{CONSUL_URL}/v1/query/{query_id}/execute"
+    headers = {"Content-Type": "application/json"}
+    if CONSUL_TOKEN:
+        headers["X-Consul-Token"] = CONSUL_TOKEN
+    
     params = {}
     if dc:
         params["dc"] = dc
     
-    data = await make_request("GET", f"/v1/query/{query_id}/execute", params=params)
-    return json.dumps(data, indent=2)
+    async with httpx.AsyncClient() as http_client:
+        response = await http_client.get(
+            url,
+            params=params,
+            headers=headers
+        )
+        try:
+            response.raise_for_status()
+            return json.dumps(response.json(), indent=2)
+        except httpx.HTTPStatusError as e:
+            return json.dumps({
+                "error": True,
+                "status_code": e.response.status_code,
+                "message": str(e),
+                "details": e.response.text
+            }, indent=2)
 
 # 9. Service Mesh Intention
 @mcp.tool()
@@ -296,6 +367,15 @@ async def create_intention(
     if action not in ["allow", "deny"]:
         return json.dumps({"error": "Action must be either 'allow' or 'deny'"})
     
+    # The Python consul package may not support connect intentions API
+    # Falling back to HTTP request method for this one
+    import httpx
+    
+    url = f"{CONSUL_URL}/v1/connect/intentions"
+    headers = {"Content-Type": "application/json"}
+    if CONSUL_TOKEN:
+        headers["X-Consul-Token"] = CONSUL_TOKEN
+    
     intention_def = {
         "SourceName": source_name,
         "DestinationName": destination_name,
@@ -311,8 +391,22 @@ async def create_intention(
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid JSON in meta parameter"})
     
-    result = await make_request("POST", "/v1/connect/intentions", json_data=intention_def)
-    return json.dumps(result, indent=2)
+    async with httpx.AsyncClient() as http_client:
+        response = await http_client.post(
+            url,
+            json=intention_def,
+            headers=headers
+        )
+        try:
+            response.raise_for_status()
+            return json.dumps(response.json(), indent=2)
+        except httpx.HTTPStatusError as e:
+            return json.dumps({
+                "error": True,
+                "status_code": e.response.status_code,
+                "message": str(e),
+                "details": e.response.text
+            }, indent=2)
 
 # 10. KV Store Operations - Get
 @mcp.tool()
@@ -331,18 +425,32 @@ async def kv_get(
         recurse: If true, retrieves all keys with the given prefix
         raw: If true, returns just the raw value without metadata
     """
+    client = get_consul_client()
+    
     params = {}
     if dc:
         params["dc"] = dc
-    if recurse:
-        params["recurse"] = "true"
-    if raw:
-        params["raw"] = "true"
     
-    data = await make_request("GET", f"/v1/kv/{key}", params=params)
-    return json.dumps(data, indent=2)
+    async def do_get():
+        return client.kv.get(key, recurse=recurse, **params)
+    
+    index, value = await run_sync(do_get)
+    
+    if value is None:
+        return json.dumps({"error": "Key not found"}, indent=2)
+    
+    if raw:
+        if recurse:
+            # For recursive operations, just return the full structure
+            return json.dumps(value, indent=2)
+        else:
+            # For single key with raw, return just the value
+            return value["Value"].decode("utf-8") if value["Value"] else ""
+    else:
+        # Normal get operation
+        return json.dumps(value, indent=2)
 
-# KV Store Operations - Put
+# 11. KV Store Operations - Put
 @mcp.tool()
 async def kv_put(
     key: str,
@@ -361,35 +469,23 @@ async def kv_put(
         flags: Unsigned integer value to assign to the key
         cas: Check-and-set value for optimistic locking
     """
+    client = get_consul_client()
+    
     params = {}
     if dc:
         params["dc"] = dc
     if flags is not None:
-        params["flags"] = str(flags)
+        params["flags"] = flags
     if cas is not None:
-        params["cas"] = str(cas)
+        params["cas"] = cas
     
-    # The value is sent as the request body, not as JSON
-    async with httpx.AsyncClient() as client:
-        response = await client.put(
-            f"{CONSUL_URL}/v1/kv/{key}",
-            params=params,
-            headers=get_headers(),
-            content=value,
-            timeout=30.0
-        )
-        try:
-            response.raise_for_status()
-            return json.dumps({"success": response.json()}, indent=2)
-        except httpx.HTTPStatusError as e:
-            return json.dumps({
-                "error": True,
-                "status_code": e.response.status_code,
-                "message": str(e),
-                "details": e.response.text
-            }, indent=2)
+    async def do_put():
+        return client.kv.put(key, value, **params)
+    
+    result = await run_sync(do_put)
+    return json.dumps({"success": result}, indent=2)
 
-# KV Store Operations - Delete
+# 12. KV Store Operations - Delete
 @mcp.tool()
 async def kv_delete(
     key: str,
@@ -404,14 +500,17 @@ async def kv_delete(
         dc: Datacenter to delete from
         recurse: If true, deletes all keys with the given prefix
     """
+    client = get_consul_client()
+    
     params = {}
     if dc:
         params["dc"] = dc
-    if recurse:
-        params["recurse"] = "true"
     
-    data = await make_request("DELETE", f"/v1/kv/{key}", params=params)
-    return json.dumps(data, indent=2)
+    async def do_delete():
+        return client.kv.delete(key, recurse=recurse, **params)
+    
+    result = await run_sync(do_delete)
+    return json.dumps({"success": result}, indent=2)
 
 # Main entry point
 if __name__ == "__main__":

@@ -3,7 +3,7 @@ Consul MCP Server
 
 Overview
 --------
-Consul MCP Server is a Model Context Protocol server that exposes Consul API functionality as easily accessible tools for large language models (LLMs). It enables programmatic access to various Consul operations, making service discovery, registration, and configuration management tasks seamless.
+Consul MCP Server is a Model Context Protocol server that exposes Consul API functionality as easily accessible tools for LLMs. It enables programmatic access to various Consul operations, making service discovery, registration, and configuration management tasks seamless.
 
 Features
 --------
