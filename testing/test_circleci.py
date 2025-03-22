@@ -193,10 +193,10 @@ async def test_organization_endpoints(org_id=None, org_slug=None):
         # rather than a slug component
         if org_id:
             results.append(await run_test(
-                f"List Contexts (owner_id={org_id})", 
-                list_contexts, 
-                owner_id=org_id
-            ))
+            f"List Contexts (owner_slug={org_slug})", 
+            list_contexts, 
+            owner_slug=org_slug
+        ))
     
     return results
 

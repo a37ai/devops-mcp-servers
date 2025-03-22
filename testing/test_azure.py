@@ -1,3 +1,8 @@
+import sys
+import os
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pytest
 import json
 import time
@@ -201,6 +206,7 @@ def test_list_virtual_machines(mock_get_client):
     
     # Configure client to return our mock VM
     mock_compute_client.virtual_machines.list.return_value = [mock_vm]
+    mock_compute_client.virtual_machines.list_all.return_value = [mock_vm]  # Add this line
     mock_compute_client.virtual_machines.instance_view.return_value = mock_instance_view
     mock_get_client.return_value = mock_compute_client
     

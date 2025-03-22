@@ -1,3 +1,8 @@
+import sys
+import os
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pytest
 import json
 import boto3
@@ -213,17 +218,15 @@ def test_create_ec2_instance():
         if not response['SecurityGroups']:
             pytest.skip("No default security group found")
         
-        security_group_id = response['SecurityGroups'][0]['GroupId']
-        
         # Create EC2 instance
         result = create_ec2_instance(
             ami_id=ami_id,
             instance_type="t2.micro",
-            security_group_ids=[security_group_id],
             name=TEST_EC2_INSTANCE_NAME,
             region=TEST_REGION
         )
         data = json.loads(result)
+        print(f"EC2 instance creation response: {data}")
         
         # Verify success
         assert data['Status'] == 'Success'

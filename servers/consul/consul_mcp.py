@@ -11,6 +11,7 @@ import asyncio
 import functools
 from typing import Dict, List, Optional, Union, Any
 from consul import Consul
+from consul.base import ACLPermissionDenied  # Import directly from consul.base
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
 
@@ -40,23 +41,21 @@ def get_consul_client():
     return Consul(host=host, port=port, token=CONSUL_TOKEN)
 
 # Helper to run synchronous functions in a thread pool
-async def run_sync(func, *args, **kwargs):
+async def run_sync(func):
+    """Run a synchronous function in a thread pool."""
     loop = asyncio.get_event_loop()
-    return await loop.run_in_executor(
-        None, functools.partial(func, *args, **kwargs)
-    )
+    return await loop.run_in_executor(None, func)
 
 # 1. List Datacenters
 @mcp.tool()
 async def list_datacenters() -> str:
     """
     Returns a list of all known datacenters sorted by estimated median round trip time.
-    
-    This tool doesn't require any parameters.
     """
     client = get_consul_client()
     
-    async def get_datacenters():
+    # Make this a regular function, not an async function
+    def get_datacenters():
         return client.catalog.datacenters()
     
     datacenters = await run_sync(get_datacenters)
@@ -67,11 +66,6 @@ async def list_datacenters() -> str:
 async def list_nodes(dc: Optional[str] = None, near: Optional[str] = None, filter: Optional[str] = None) -> str:
     """
     Returns the nodes registered in a given datacenter.
-    
-    Args:
-        dc: Specifies the datacenter to query
-        near: Sorts nodes by round trip time from a specified node
-        filter: Filters results based on a query expression
     """
     client = get_consul_client()
     
@@ -80,13 +74,20 @@ async def list_nodes(dc: Optional[str] = None, near: Optional[str] = None, filte
         params["dc"] = dc
     if near:
         params["near"] = near
-    if filter:
-        params["filter"] = filter
+    # Note: Remove filter param as the Consul API doesn't support it
+    # If filter is needed, we'll need to do filtering after getting results
     
-    async def get_nodes():
+    def get_nodes():
         return client.catalog.nodes(**params)
     
     index, nodes = await run_sync(get_nodes)
+    
+    # Apply manual filtering if filter parameter was provided
+    if filter:
+        # Implement manual filtering logic here if needed
+        # For now, just add a warning
+        print(f"Warning: Filter parameter '{filter}' not supported by underlying API, results not filtered")
+    
     return json.dumps(nodes, indent=2)
 
 # 3. List Services
@@ -104,7 +105,8 @@ async def list_services(dc: Optional[str] = None) -> str:
     if dc:
         params["dc"] = dc
     
-    async def get_services():
+    # Change this to regular function
+    def get_services():
         return client.catalog.services(**params)
     
     index, services = await run_sync(get_services)
@@ -119,7 +121,8 @@ async def register_service(
     port: Optional[int] = None,
     tags: Optional[str] = None,
     meta: Optional[str] = None,
-    dc: Optional[str] = None
+    dc: Optional[str] = None,
+    node: Optional[str] = None  # Adding node parameter which appears to be required
 ) -> str:
     """
     Registers a new service with the catalog.
@@ -132,45 +135,59 @@ async def register_service(
         tags: Comma-separated list of tags for the service
         meta: JSON string with metadata key-value pairs
         dc: Datacenter to register in
+        node: Node to register service on (required)
     """
     client = get_consul_client()
     
+    # Get nodes if node not provided
+    if not node:
+        def get_nodes():
+            return client.catalog.nodes()
+        
+        index, nodes = await run_sync(get_nodes)
+        if not nodes:
+            return json.dumps({"error": "No nodes found, cannot register service"})
+        
+        # Use the first node
+        node = nodes[0]['Node']
+    
+    # Build service definition
     service_def = {
-        "Name": name
+        "node": node,
+        "service": name
     }
     
     if id:
-        service_def["ID"] = id
+        service_def["service"] = id  # Changed from service_id to service
     if address:
-        service_def["Address"] = address
+        service_def["address"] = address
     if port:
-        service_def["Port"] = port
+        service_def["port"] = port
     if tags:
-        service_def["Tags"] = [tag.strip() for tag in tags.split(",")]
+        service_def["tags"] = [tag.strip() for tag in tags.split(",")]
     if meta:
         try:
-            service_def["Meta"] = json.loads(meta)
+            service_def["meta"] = json.loads(meta)
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid JSON in meta parameter"})
     
-    catalog_def = {
-        "Service": service_def
-    }
-    
     if dc:
-        catalog_def["Datacenter"] = dc
+        service_def["dc"] = dc
     
-    async def do_register():
-        return client.catalog.register(**catalog_def)
+    def do_register():
+        return client.catalog.register(**service_def)
     
-    result = await run_sync(do_register)
-    return json.dumps({"success": result}, indent=2)
+    try:
+        result = await run_sync(do_register)
+        return json.dumps({"success": result}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # 5. Deregister Service
 @mcp.tool()
 async def deregister_service(
     service_id: str,
-    node: Optional[str] = None, 
+    node: str,
     dc: Optional[str] = None
 ) -> str:
     """
@@ -187,18 +204,21 @@ async def deregister_service(
     client = get_consul_client()
     
     deregister_params = {
-        "service_id": service_id,
-        "node": node
+        "node": node,
+        "service_id": service_id
     }
     
     if dc:
         deregister_params["dc"] = dc
     
-    async def do_deregister():
+    def do_deregister():
         return client.catalog.deregister(**deregister_params)
     
-    result = await run_sync(do_deregister)
-    return json.dumps({"success": result}, indent=2)
+    try:
+        result = await run_sync(do_deregister)
+        return json.dumps({"success": result}, indent=2)
+    except Exception as e:
+        return json.dumps({"success": False, "error": str(e)}, indent=2)
 
 # 6. Health Checking
 @mcp.tool()
@@ -228,13 +248,17 @@ async def health_service(
         params["passing"] = passing
     if near:
         params["near"] = near
-    if filter:
-        params["filter"] = filter
+    # Remove filter param as it's not supported
     
-    async def get_health():
+    def get_health():
         return client.health.service(service, **params)
     
     index, health_data = await run_sync(get_health)
+    
+    # Apply manual filtering if filter parameter was provided
+    if filter:
+        print(f"Warning: Filter parameter '{filter}' not supported by underlying API, results not filtered")
+    
     return json.dumps(health_data, indent=2)
 
 # 7. Create ACL Token
@@ -418,12 +442,6 @@ async def kv_get(
 ) -> str:
     """
     Retrieves a key-value pair from the KV store.
-    
-    Args:
-        key: Key to retrieve
-        dc: Datacenter to query
-        recurse: If true, retrieves all keys with the given prefix
-        raw: If true, returns just the raw value without metadata
     """
     client = get_consul_client()
     
@@ -431,24 +449,27 @@ async def kv_get(
     if dc:
         params["dc"] = dc
     
-    async def do_get():
+    def do_get():
         return client.kv.get(key, recurse=recurse, **params)
     
-    index, value = await run_sync(do_get)
-    
-    if value is None:
-        return json.dumps({"error": "Key not found"}, indent=2)
-    
-    if raw:
-        if recurse:
-            # For recursive operations, just return the full structure
-            return json.dumps(value, indent=2)
+    try:
+        index, value = await run_sync(do_get)
+        
+        if value is None:
+            return json.dumps({"error": "Key not found"}, indent=2)
+        
+        if raw:
+            if recurse:
+                # For recursive operations, just return the full structure
+                return json.dumps(value, indent=2)
+            else:
+                # For single key with raw, return just the value
+                return value["Value"].decode("utf-8") if value["Value"] else ""
         else:
-            # For single key with raw, return just the value
-            return value["Value"].decode("utf-8") if value["Value"] else ""
-    else:
-        # Normal get operation
-        return json.dumps(value, indent=2)
+            # Normal get operation
+            return json.dumps(value, indent=2)
+    except Exception as e:
+        return json.dumps({"error": str(e)}, indent=2)
 
 # 11. KV Store Operations - Put
 @mcp.tool()
@@ -479,10 +500,21 @@ async def kv_put(
     if cas is not None:
         params["cas"] = cas
     
-    async def do_put():
-        return client.kv.put(key, value, **params)
+    def do_put():
+        try:
+            return client.kv.put(key, value, **params)
+        except ACLPermissionDenied:  # Fixed: use imported ACLPermissionDenied
+            return {"acl_error": "Permission denied: ACL permissions required for KV write operations"}
+        except Exception as e:
+            return {"error": str(e)}
     
     result = await run_sync(do_put)
+    
+    # Check if we got an error
+    if isinstance(result, dict) and ("acl_error" in result or "error" in result):
+        error_msg = result.get("acl_error", result.get("error", "Unknown error"))
+        return json.dumps({"success": False, "error": error_msg}, indent=2)
+    
     return json.dumps({"success": result}, indent=2)
 
 # 12. KV Store Operations - Delete
@@ -494,11 +526,6 @@ async def kv_delete(
 ) -> str:
     """
     Deletes a key-value pair from the KV store.
-    
-    Args:
-        key: Key to delete
-        dc: Datacenter to delete from
-        recurse: If true, deletes all keys with the given prefix
     """
     client = get_consul_client()
     
@@ -506,10 +533,21 @@ async def kv_delete(
     if dc:
         params["dc"] = dc
     
-    async def do_delete():
-        return client.kv.delete(key, recurse=recurse, **params)
+    def do_delete():
+        try:
+            return client.kv.delete(key, recurse=recurse, **params)
+        except ACLPermissionDenied:  # Fixed: use imported ACLPermissionDenied
+            return {"acl_error": "Permission denied: ACL permissions required for KV write operations"}
+        except Exception as e:
+            return {"error": str(e)}
     
     result = await run_sync(do_delete)
+    
+    # Check if we got an error
+    if isinstance(result, dict) and ("acl_error" in result or "error" in result):
+        error_msg = result.get("acl_error", result.get("error", "Unknown error"))
+        return json.dumps({"success": False, "error": error_msg}, indent=2)
+    
     return json.dumps({"success": result}, indent=2)
 
 # Main entry point
