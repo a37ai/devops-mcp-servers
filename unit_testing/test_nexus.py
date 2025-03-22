@@ -26,7 +26,6 @@ def print_result(function_name, result):
 
 def run_tests():
     # Set up environment first
-    setup_environment()
     
     print("Starting Nexus API Tests...")
     print(f"Using Nexus URL: {os.environ.get('NEXUS_URL')}")

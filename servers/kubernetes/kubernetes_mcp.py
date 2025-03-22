@@ -14,7 +14,7 @@ import asyncio
 import logging
 import subprocess
 from typing import Dict, List, Optional, Any, Union, Tuple
-from servers.kubernetes.kubernetes import client, config, watch
+from kubernetes import client, config, watch
 from kubernetes.client.rest import ApiException
 from mcp.server.fastmcp import FastMCP, Context
 
@@ -1515,15 +1515,15 @@ async def get_cluster_metrics() -> str:
             cpu_capacity = capacity.get("cpu", "0")
             cpu_allocatable = allocatable.get("cpu", "0")
             
-            cluster_metrics["cpu"]["capacity"] += self._parse_cpu(cpu_capacity)
-            cluster_metrics["cpu"]["allocatable"] += self._parse_cpu(cpu_allocatable)
+            cluster_metrics["cpu"]["capacity"] += _parse_cpu(cpu_capacity)
+            cluster_metrics["cpu"]["allocatable"] += _parse_cpu(cpu_allocatable)
             
             # Memory
             memory_capacity = capacity.get("memory", "0")
             memory_allocatable = allocatable.get("memory", "0")
             
-            cluster_metrics["memory"]["capacity"] += self._parse_memory(memory_capacity)
-            cluster_metrics["memory"]["allocatable"] += self._parse_memory(memory_allocatable)
+            cluster_metrics["memory"]["capacity"] += _parse_memory(memory_capacity)
+            cluster_metrics["memory"]["allocatable"] += _parse_memory(memory_allocatable)
             
             # Pods
             pods_capacity = int(capacity.get("pods", "0"))
@@ -1544,15 +1544,15 @@ async def get_cluster_metrics() -> str:
                 cpu_request = requests.get("cpu", "0")
                 cpu_limit = limits.get("cpu", "0")
                 
-                cluster_metrics["cpu"]["requests"] += self._parse_cpu(cpu_request)
-                cluster_metrics["cpu"]["limits"] += self._parse_cpu(cpu_limit)
+                cluster_metrics["cpu"]["requests"] += _parse_cpu(cpu_request)
+                cluster_metrics["cpu"]["limits"] += _parse_cpu(cpu_limit)
                 
                 # Memory requests and limits
                 memory_request = requests.get("memory", "0")
                 memory_limit = limits.get("memory", "0")
                 
-                cluster_metrics["memory"]["requests"] += self._parse_memory(memory_request)
-                cluster_metrics["memory"]["limits"] += self._parse_memory(memory_limit)
+                cluster_metrics["memory"]["requests"] += _parse_memory(memory_request)
+                cluster_metrics["memory"]["limits"] += _parse_memory(memory_limit)
         
         # Format the results
         result.append("\nCPU:")
@@ -1562,10 +1562,10 @@ async def get_cluster_metrics() -> str:
         result.append(f"  Limits:      {cluster_metrics['cpu']['limits']:.2f} cores ({(cluster_metrics['cpu']['limits'] / cluster_metrics['cpu']['allocatable'] * 100):.2f}% of allocatable)")
         
         result.append("\nMemory:")
-        result.append(f"  Capacity:    {self._format_memory(cluster_metrics['memory']['capacity'])}")
-        result.append(f"  Allocatable: {self._format_memory(cluster_metrics['memory']['allocatable'])}")
-        result.append(f"  Requests:    {self._format_memory(cluster_metrics['memory']['requests'])} ({(cluster_metrics['memory']['requests'] / cluster_metrics['memory']['allocatable'] * 100):.2f}% of allocatable)")
-        result.append(f"  Limits:      {self._format_memory(cluster_metrics['memory']['limits'])} ({(cluster_metrics['memory']['limits'] / cluster_metrics['memory']['allocatable'] * 100):.2f}% of allocatable)")
+        result.append(f"  Capacity:    {_format_memory(cluster_metrics['memory']['capacity'])}")
+        result.append(f"  Allocatable: {_format_memory(cluster_metrics['memory']['allocatable'])}")
+        result.append(f"  Requests:    {_format_memory(cluster_metrics['memory']['requests'])} ({(cluster_metrics['memory']['requests'] / cluster_metrics['memory']['allocatable'] * 100):.2f}% of allocatable)")
+        result.append(f"  Limits:      {_format_memory(cluster_metrics['memory']['limits'])} ({(cluster_metrics['memory']['limits'] / cluster_metrics['memory']['allocatable'] * 100):.2f}% of allocatable)")
         
         result.append("\nPods:")
         result.append(f"  Capacity:    {cluster_metrics['pods']['capacity']}")
@@ -1586,7 +1586,7 @@ async def get_cluster_metrics() -> str:
                     break
             
             # Try to get node metrics
-            node_metrics = await self._get_node_metrics(node_name)
+            node_metrics = await _get_node_metrics(node_name)
             
             cpu_used = node_metrics.get("cpu", "N/A")
             memory_used = node_metrics.get("memory", "N/A")

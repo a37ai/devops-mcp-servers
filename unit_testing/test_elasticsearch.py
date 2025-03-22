@@ -9,7 +9,7 @@ from typing import Any, Dict, List, Optional, Union
 
 # Import the MCP tools directly
 from mcp.server.fastmcp import FastMCP
-from elasticsearch_mcp import *  # Import all tools from the elk_mcp server
+from servers.elasticsearch.elasticsearch_mcp import *  # Import all tools from the elk_mcp server
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')

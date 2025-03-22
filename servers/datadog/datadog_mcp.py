@@ -208,33 +208,33 @@ def register_dashboards_resources_and_tools(self):
         response = dashboards_api.get_dashboard(dashboard_id)
         return response.to_json()
     
-    @self.mcp.tool()
-    def create_dashboard(ctx: Context, title: str, description: str = "", 
-                         widgets: list = None, layout_type: str = "ordered") -> str:
-        """Create a dashboard in Datadog"""
-        from datadog_api_client.v1.model.dashboard import Dashboard
-        from datadog_api_client.v1.model.dashboard_layout_type import DashboardLayoutType
-        from datadog_api_client.v1.model.dashboard_widget import DashboardWidget
+    # @self.mcp.tool()
+    # def create_dashboard(ctx: Context, title: str, description: str = "", 
+    #                      widgets: list = None, layout_type: str = "ordered") -> str:
+    #     """Create a dashboard in Datadog"""
+    #     from datadog_api_client.v1.model.dashboard import Dashboard
+    #     from datadog_api_client.v1.model.dashboard_layout_type import DashboardLayoutType
+    #     from datadog_api_client.v1.model.dashboard_widget import DashboardWidget
         
-        dashboards_api = ctx.request_context.lifespan_context["dashboards_api"]
+    #     dashboards_api = ctx.request_context.lifespan_context["dashboards_api"]
         
-        # Set up default widgets if none provided
-        if widgets is None:
-            widgets = []
+    #     # Set up default widgets if none provided
+    #     if widgets is None:
+    #         widgets = []
         
-        try:
-            # Create dashboard with specified parameters
-            dashboard = Dashboard(
-                title=title,
-                description=description,
-                layout_type=DashboardLayoutType(layout_type),
-                widgets=[DashboardWidget(**widget) for widget in widgets]
-            )
+    #     try:
+    #         # Create dashboard with specified parameters
+    #         dashboard = Dashboard(
+    #             title=title,
+    #             description=description,
+    #             layout_type=DashboardLayoutType(layout_type),
+    #             widgets=[DashboardWidget(**widget) for widget in widgets]
+    #         )
             
-            response = dashboards_api.create_dashboard(body=dashboard)
-            return response.to_json()
-        except Exception as e:
-            return f"Error creating dashboard: {str(e)}"
+    #         response = dashboards_api.create_dashboard(body=dashboard)
+    #         return response.to_json()
+    #     except Exception as e:
+    #         return f"Error creating dashboard: {str(e)}"
 def register_monitors_resources_and_tools(self):
     """Register resources and tools for Datadog Monitors API"""
     

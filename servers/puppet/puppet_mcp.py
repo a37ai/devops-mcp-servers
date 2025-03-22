@@ -14,7 +14,7 @@ mcp = FastMCP("Puppet MCP Server")
 # Helper function for authenticated requests to Puppet API
 def puppet_request(ctx: Context, method: str, endpoint: str, data=None, params=None, headers=None) -> dict:
     """Make an authenticated request to the Puppet API"""
-    puppet_url = os.environ.get("PUPPET_URL", "https://puppet.example.com:4433")
+    puppet_url = os.environ.get("PUPPET_URL")
     auth_token = os.environ.get("PUPPET_AUTH_TOKEN")
     
     if not auth_token:
