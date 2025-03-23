@@ -47,12 +47,6 @@ Most servers require API credentials or tokens to interact with their respective
 - [Model Context Protocol (MCP) Documentation](https://github.com/anthropics/anthropic-cookbook/tree/main/mcp)
 - [FastMCP Framework Documentation](https://github.com/anthropics/anthropic-cookbook/tree/main/mcp/python)
 
-## 👥 Top Contributors
-
-<a href="https://github.com/a37ai/devops-mcp-servers/graphs/contributors">
- <img src="https://contrib.rocks/image?repo=a37ai/devops-mcp-servers&max=10&columns=5" alt="contrib.rocks image" />
-</a>
-
 ## 📄 License
 
 This project is licensed under the MIT License - see the LICENSE file for details.
