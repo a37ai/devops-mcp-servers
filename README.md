@@ -50,7 +50,7 @@ Most servers require API credentials or tokens to interact with their respective
 ## 👥 Top Contributors
 
 <a href="https://github.com/a37ai/devops-mcp-servers/graphs/contributors">
-  <img src="https://contrib.rocks/image?repo=a37ai/devops-mcp-servers" alt="contrib.rocks image" />
+ <img src="https://contrib.rocks/image?repo=a37ai/devops-mcp-servers&max=10&columns=5" alt="contrib.rocks image" />
 </a>
 
 ## 📄 License
