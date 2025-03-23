@@ -1,4 +1,4 @@
-# DevOps MCP Servers hello
+# DevOps MCP Servers 
 
 This repository is a collection of Model Context Protocol (MCP) server implementations specifically designed for DevOps tools and platforms. These servers enable Large Language Models (LLMs) to interact directly with popular DevOps systems, providing a standardized way to automate and control infrastructure, deployment pipelines, monitoring, and other DevOps operations.
 
