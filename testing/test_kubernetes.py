@@ -63,57 +63,9 @@ async def invoke_mcp_tool(tool_name: str, **kwargs) -> str:
     
     return result
 
-# Fix for PVC status handling in the kubernetes_mcp.py file
-def fix_pvc_status_handling():
-    """Fix the PVC status handling in the list_persistent_volume_claims function."""
-    # This modifies the function in the imported module
-    original_function = kubernetes_mcp.list_persistent_volume_claims
-    
-    async def fixed_list_persistent_volume_claims(namespace: Optional[str] = None) -> str:
-        """List all PersistentVolumeClaims in a namespace."""
-        try:
-            ns = namespace or kubernetes_mcp.state["current_namespace"]
-            pvcs = kubernetes_mcp.core_v1_api.list_namespaced_persistent_volume_claim(namespace=ns)
-            
-            result = ["NAME\tSTATUS\tVOLUME\tCAPACITY\tACCESS MODES\tSTORAGECLASS\tAGE"]
-            for pvc in pvcs.items:
-                metadata = pvc.metadata
-                spec = pvc.spec
-                status = pvc.status
-                
-                name = metadata.name
-                pvc_status = status.phase or "N/A"
-                volume = getattr(status, 'volume_name', None) or "N/A"
-                
-                # Handle capacity more safely
-                capacity = "N/A"
-                if hasattr(status, 'capacity') and status.capacity and 'storage' in status.capacity:
-                    capacity = status.capacity['storage']
-                
-                access_modes = ",".join(spec.access_modes) if spec.access_modes else "N/A"
-                storage_class = spec.storage_class_name or "N/A"
-                age = metadata.creation_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-                
-                result.append(f"{name}\t{pvc_status}\t{volume}\t{capacity}\t{access_modes}\t{storage_class}\t{age}")
-            
-            if not pvcs.items:
-                return f"No PersistentVolumeClaims found in namespace {ns}"
-                
-            return "\n".join(result)
-        except kubernetes_mcp.ApiException as e:
-            return f"Error listing PersistentVolumeClaims: {str(e)}"
-        except Exception as e:
-            return f"Unexpected error: {str(e)}"
-    
-    # Replace the original function with the fixed one
-    kubernetes_mcp.list_persistent_volume_claims = fixed_list_persistent_volume_claims
-
 async def run_tests():
     """Run a series of tests against the Kubernetes MCP server."""
     try:
-        # Fix PVC status handling
-        fix_pvc_status_handling()
-        
         # Create test namespace
         logger.info(f"Creating test namespace: {TEST_NAMESPACE}")
         await invoke_mcp_tool(

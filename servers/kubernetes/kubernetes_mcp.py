@@ -1205,8 +1205,13 @@ async def list_persistent_volume_claims(namespace: Optional[str] = None) -> str:
             
             name = metadata.name
             pvc_status = status.phase or "N/A"
-            volume = status.volume_name or "N/A"
-            capacity = status.capacity.get("storage", "N/A") if status.capacity else "N/A"
+            volume = getattr(status, 'volume_name', None) or "N/A"
+            
+            # Handle capacity more safely
+            capacity = "N/A"
+            if hasattr(status, 'capacity') and status.capacity and 'storage' in status.capacity:
+                capacity = status.capacity['storage']
+            
             access_modes = ",".join(spec.access_modes) if spec.access_modes else "N/A"
             storage_class = spec.storage_class_name or "N/A"
             age = metadata.creation_timestamp.strftime("%Y-%m-%d %H:%M:%S")
