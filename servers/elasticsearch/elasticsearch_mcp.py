@@ -18,6 +18,9 @@ ELK_TOKEN = os.getenv("ELASTICSEARCH_TOKEN")
 # Create MCP server instance
 mcp = FastMCP("elk-mcp-server")
 
+# Track if we're in serverless mode
+is_serverless = None
+
 # Helper function to make requests to Elasticsearch
 async def make_elk_request(
     path: str,
@@ -82,6 +85,22 @@ def format_response(data: Any) -> str:
     except Exception as error:
         return f"Error formatting response: {str(error)}"
 
+# Check if we're running in serverless mode
+async def check_serverless_mode() -> bool:
+    """Detect if the Elasticsearch instance is running in serverless mode"""
+    global is_serverless
+    
+    if is_serverless is None:
+        try:
+            info = await make_elk_request("/")
+            is_serverless = info.get("version", {}).get("build_flavor") == "serverless"
+            logger.info(f"Detected Elasticsearch running in {'serverless' if is_serverless else 'standard'} mode")
+        except Exception as error:
+            logger.error(f"Error detecting serverless mode: {error}")
+            is_serverless = False
+    
+    return is_serverless
+
 # =============================================================================
 # 1. Cluster APIs
 # =============================================================================
@@ -100,6 +119,11 @@ async def cluster_health(
         level: Level of health information to report (cluster, indices, shards)
     """
     try:
+        # Check if we're in serverless mode
+        serverless = await check_serverless_mode()
+        if serverless:
+            return "Cluster health API is not available in Elasticsearch Serverless mode"
+            
         path = "/_cluster/health"
         
         if index:
@@ -118,6 +142,8 @@ async def cluster_health(
         
         return format_response(result)
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return "Cluster health API is not available in Elasticsearch Serverless mode"
         return f"Error getting cluster health: {format_response(error)}"
 
 @mcp.tool()
@@ -128,6 +154,11 @@ async def cluster_stats(node_id: Optional[str] = None) -> str:
         node_id: Optional specific node ID to get stats for
     """
     try:
+        # Check if we're in serverless mode
+        serverless = await check_serverless_mode()
+        if serverless:
+            return "Cluster stats API is not available in Elasticsearch Serverless mode"
+            
         path = "/_cluster/stats"
         
         if node_id:
@@ -137,6 +168,8 @@ async def cluster_stats(node_id: Optional[str] = None) -> str:
         
         return format_response(result)
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return "Cluster stats API is not available in Elasticsearch Serverless mode"
         return f"Error getting cluster stats: {format_response(error)}"
 
 @mcp.tool()
@@ -153,6 +186,11 @@ async def cluster_settings(
         include_defaults: Whether to include default settings in the response
     """
     try:
+        # Check if we're in serverless mode
+        serverless = await check_serverless_mode()
+        if serverless:
+            return "Cluster settings API is not available in Elasticsearch Serverless mode"
+            
         path = f"/_cluster/settings{'?include_defaults=true' if include_defaults else ''}"
         
         if action == "get":
@@ -167,6 +205,8 @@ async def cluster_settings(
         else:
             return f"Invalid action: {action}. Must be 'get' or 'update'."
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return "Cluster settings API is not available in Elasticsearch Serverless mode"
         return f"Error with cluster settings: {format_response(error)}"
 
 # =============================================================================
@@ -189,10 +229,24 @@ async def create_index(
         aliases: Optional index aliases
     """
     try:
+        # Check if we're in serverless mode to remove incompatible settings
+        serverless = await check_serverless_mode()
         body = {}
         
         if settings:
-            body["settings"] = settings
+            # In serverless mode, remove number_of_shards and number_of_replicas
+            if serverless:
+                sanitized_settings = settings.copy()
+                if 'number_of_shards' in sanitized_settings:
+                    del sanitized_settings['number_of_shards']
+                    logger.info("Removed 'number_of_shards' setting for serverless mode")
+                if 'number_of_replicas' in sanitized_settings:
+                    del sanitized_settings['number_of_replicas']
+                    logger.info("Removed 'number_of_replicas' setting for serverless mode")
+                body["settings"] = sanitized_settings
+            else:
+                body["settings"] = settings
+                
         if mappings:
             body["mappings"] = mappings
         if aliases:
@@ -202,6 +256,8 @@ async def create_index(
         
         return format_response(result)
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return f"Error creating index: Some settings are not available in serverless mode. Try without specifying number_of_shards and number_of_replicas."
         return f"Error creating index {index_name}: {format_response(error)}"
 
 @mcp.tool()
@@ -662,6 +718,11 @@ async def node_info(
         metrics: Comma-separated list of metrics to retrieve (e.g., 'jvm,os,process')
     """
     try:
+        # Check if we're in serverless mode
+        serverless = await check_serverless_mode()
+        if serverless:
+            return "Node info API is not available in Elasticsearch Serverless mode"
+            
         path = "/_nodes"
         
         if node_id:
@@ -674,6 +735,8 @@ async def node_info(
         
         return format_response(result)
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return "Node info API is not available in Elasticsearch Serverless mode"
         return f"Error getting node info: {format_response(error)}"
 
 @mcp.tool()
@@ -690,6 +753,11 @@ async def node_stats(
         index_metrics: Comma-separated list of index metrics to retrieve
     """
     try:
+        # Check if we're in serverless mode
+        serverless = await check_serverless_mode()
+        if serverless:
+            return "Node stats API is not available in Elasticsearch Serverless mode"
+            
         path = "/_nodes"
         
         if node_id:
@@ -707,6 +775,8 @@ async def node_stats(
         
         return format_response(result)
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return "Node stats API is not available in Elasticsearch Serverless mode"
         return f"Error getting node stats: {format_response(error)}"
 
 @mcp.tool()
@@ -715,6 +785,10 @@ async def cluster_info() -> str:
     """
     try:
         result = await make_elk_request("/")
+        
+        # Update our serverless detection while we're at it
+        global is_serverless
+        is_serverless = result.get("version", {}).get("build_flavor") == "serverless"
         
         return format_response(result)
     except Exception as error:
@@ -764,6 +838,11 @@ async def cat_nodes(
         headers: Comma-separated list of headers to include
     """
     try:
+        # Check if we're in serverless mode
+        serverless = await check_serverless_mode()
+        if serverless:
+            return "Cat nodes API is not available in Elasticsearch Serverless mode"
+            
         params = [f"format={format}"]
         
         if verbose:
@@ -778,6 +857,8 @@ async def cat_nodes(
         
         return format_response(result)
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return "Cat nodes API is not available in Elasticsearch Serverless mode"
         return f"Error listing nodes: {format_response(error)}"
 
 @mcp.tool()
@@ -806,7 +887,7 @@ async def cat_aliases(
         return f"Error listing aliases: {format_response(error)}"
 
 # =============================================================================
-# 7. Additional APIs (Kibana, Templates, etc.)
+# 7. Additional APIs (Templates, etc.)
 # =============================================================================
 
 @mcp.tool()
@@ -827,6 +908,18 @@ async def create_index_template(
         priority: Optional priority (higher takes precedence)
     """
     try:
+        # Check if we're in serverless mode to remove incompatible settings
+        serverless = await check_serverless_mode()
+        
+        if serverless and "settings" in template:
+            # Remove incompatible settings
+            if "number_of_shards" in template["settings"]:
+                del template["settings"]["number_of_shards"]
+                logger.info("Removed 'number_of_shards' from template settings for serverless mode")
+            if "number_of_replicas" in template["settings"]:
+                del template["settings"]["number_of_replicas"]
+                logger.info("Removed 'number_of_replicas' from template settings for serverless mode")
+                
         path = f"/_index_template/{name}"
         
         body = {
@@ -844,6 +937,8 @@ async def create_index_template(
         
         return format_response(result)
     except Exception as error:
+        if "not available when running in serverless mode" in str(error):
+            return f"Error creating index template: Some settings are not available in serverless mode. Try without specifying number_of_shards and number_of_replicas."
         return f"Error creating index template: {format_response(error)}"
 
 @mcp.tool()

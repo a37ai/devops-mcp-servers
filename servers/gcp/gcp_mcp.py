@@ -1,5 +1,7 @@
 from mcp.server.fastmcp import FastMCP
-from google.cloud import storage, compute, bigquery, functions_v1
+from google.cloud import bigquery
+from google.cloud import storage
+from google.cloud import functions_v1
 from google.cloud.container_v1 import ClusterManagerClient
 import google.auth
 import json
@@ -21,7 +23,8 @@ def get_gcp_client(service: str, project_id: Optional[str] = None):
     if service == 'storage':
         return storage.Client(project=project, credentials=credentials)
     elif service == 'compute':
-        return compute.ComputeClient(credentials=credentials)
+        # Google Compute Engine uses discovery API, not a direct client
+        return discovery.build('compute', 'v1', credentials=credentials)
     elif service == 'bigquery':
         return bigquery.Client(project=project, credentials=credentials)
     elif service == 'functions':
@@ -42,18 +45,24 @@ def list_gcs_buckets(project_id: Optional[str] = None) -> str:
     Returns:
         JSON string with bucket information
     """
-    storage_client = get_gcp_client('storage', project_id)
-    
-    buckets = []
-    for bucket in storage_client.list_buckets():
-        buckets.append({
-            'Name': bucket.name,
-            'CreationDate': bucket.time_created.isoformat() if bucket.time_created else None,
-            'Location': bucket.location,
-            'StorageClass': bucket.storage_class
-        })
-    
-    return json.dumps(buckets, indent=2)
+    try:
+        storage_client = get_gcp_client('storage', project_id)
+        
+        buckets = []
+        for bucket in storage_client.list_buckets():
+            buckets.append({
+                'Name': bucket.name,
+                'CreationDate': bucket.time_created.isoformat() if bucket.time_created else None,
+                'Location': bucket.location,
+                'StorageClass': bucket.storage_class
+            })
+        
+        return json.dumps(buckets, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'Status': 'Error',
+            'Message': str(e)
+        }, indent=2)
 
 @mcp.tool()
 def list_gcs_objects(bucket_name: str, prefix: Optional[str] = "", max_items: int = 100) -> str:
@@ -67,25 +76,31 @@ def list_gcs_objects(bucket_name: str, prefix: Optional[str] = "", max_items: in
     Returns:
         JSON string with object information
     """
-    storage_client = get_gcp_client('storage')
-    
-    bucket = storage_client.bucket(bucket_name)
-    blobs = bucket.list_blobs(prefix=prefix, max_results=max_items)
-    
-    objects = []
-    for blob in blobs:
-        objects.append({
-            'Name': blob.name,
-            'Size': blob.size,
-            'ContentType': blob.content_type,
-            'Updated': blob.updated.isoformat() if blob.updated else None,
-            'StorageClass': blob.storage_class
-        })
-    
-    return json.dumps({
-        'Objects': objects,
-        'Count': len(objects)
-    }, indent=2)
+    try:
+        storage_client = get_gcp_client('storage')
+        
+        bucket = storage_client.bucket(bucket_name)
+        blobs = bucket.list_blobs(prefix=prefix, max_results=max_items)
+        
+        objects = []
+        for blob in blobs:
+            objects.append({
+                'Name': blob.name,
+                'Size': blob.size,
+                'ContentType': blob.content_type,
+                'Updated': blob.updated.isoformat() if blob.updated else None,
+                'StorageClass': blob.storage_class
+            })
+        
+        return json.dumps({
+            'Objects': objects,
+            'Count': len(objects)
+        }, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'Status': 'Error',
+            'Message': str(e)
+        }, indent=2)
 
 # Core GCE (Google Compute Engine) Tools
 @mcp.tool()
@@ -99,54 +114,59 @@ def list_gce_instances(project_id: Optional[str] = None, zone: Optional[str] = N
     Returns:
         JSON string with GCE instance information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    # Using the lower-level REST API via the discovery service
-    
-    service = discovery.build('compute', 'v1', credentials=credentials)
-    
-    instances = []
-    
-    # If zone is specified, only list instances in that zone
-    if zone:
-        request = service.instances().list(project=project, zone=zone)
-        response = request.execute()
+    try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
         
-        if 'items' in response:
-            for instance in response['items']:
-                instances.append({
-                    'Name': instance['name'],
-                    'Zone': zone,
-                    'MachineType': instance['machineType'].split('/')[-1],
-                    'Status': instance['status'],
-                    'InternalIP': get_instance_ip(instance, 'INTERNAL'),
-                    'ExternalIP': get_instance_ip(instance, 'EXTERNAL'),
-                    'CreationTime': instance['creationTimestamp']
-                })
-    else:
-        # List all zones first, then get instances from each zone
-        zones_request = service.zones().list(project=project)
-        zones_response = zones_request.execute()
+        # Using the lower-level REST API via the discovery service
+        service = discovery.build('compute', 'v1', credentials=credentials)
         
-        for zone_item in zones_response.get('items', []):
-            zone_name = zone_item['name']
-            request = service.instances().list(project=project, zone=zone_name)
+        instances = []
+        
+        # If zone is specified, only list instances in that zone
+        if zone:
+            request = service.instances().list(project=project, zone=zone)
             response = request.execute()
             
             if 'items' in response:
                 for instance in response['items']:
                     instances.append({
                         'Name': instance['name'],
-                        'Zone': zone_name,
+                        'Zone': zone,
                         'MachineType': instance['machineType'].split('/')[-1],
                         'Status': instance['status'],
                         'InternalIP': get_instance_ip(instance, 'INTERNAL'),
                         'ExternalIP': get_instance_ip(instance, 'EXTERNAL'),
                         'CreationTime': instance['creationTimestamp']
                     })
-    
-    return json.dumps(instances, indent=2)
+        else:
+            # List all zones first, then get instances from each zone
+            zones_request = service.zones().list(project=project)
+            zones_response = zones_request.execute()
+            
+            for zone_item in zones_response.get('items', []):
+                zone_name = zone_item['name']
+                request = service.instances().list(project=project, zone=zone_name)
+                response = request.execute()
+                
+                if 'items' in response:
+                    for instance in response['items']:
+                        instances.append({
+                            'Name': instance['name'],
+                            'Zone': zone_name,
+                            'MachineType': instance['machineType'].split('/')[-1],
+                            'Status': instance['status'],
+                            'InternalIP': get_instance_ip(instance, 'INTERNAL'),
+                            'ExternalIP': get_instance_ip(instance, 'EXTERNAL'),
+                            'CreationTime': instance['creationTimestamp']
+                        })
+        
+        return json.dumps(instances, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'Status': 'Error',
+            'Message': str(e)
+        }, indent=2)
 
 def get_instance_ip(instance, network_type):
     """Helper function to extract IP addresses from instance network interfaces"""
@@ -174,47 +194,53 @@ def list_gce_images(project_id: Optional[str] = None, family: Optional[str] = No
     Returns:
         JSON string with image information
     """
-    credentials, default_project = google.auth.default()
-    
-    # Using the lower-level REST API via the discovery service
-    service = discovery.build('compute', 'v1', credentials=credentials)
-    
-    # List of common image projects
-    image_projects = ['debian-cloud', 'ubuntu-os-cloud', 'centos-cloud', 'cos-cloud']
-    
-    # If project_id is specified, use only that project
-    if project_id:
-        image_projects = [project_id]
-    
-    images = []
-    
-    for project in image_projects:
-        request = service.images().list(project=project)
-        while request is not None:
-            response = request.execute()
-            
-            for image in response.get('items', []):
-                # Filter by family if specified
-                if family and image.get('family') != family:
-                    continue
-                    
-                images.append({
-                    'Name': image['name'],
-                    'Project': project,
-                    'Family': image.get('family', 'N/A'),
-                    'Status': image['status'],
-                    'CreationTime': image['creationTimestamp'],
-                    'DiskSizeGb': image.get('diskSizeGb', 'N/A'),
-                    'Description': image.get('description', ''),
-                    'SelfLink': image['selfLink']
-                })
-            
-            request = service.images().list_next(previous_request=request, previous_response=response)
-    
-    # Sort by creation time (newest first)
-    images.sort(key=lambda x: x['CreationTime'], reverse=True)
-    
-    return json.dumps(images, indent=2)
+    try:
+        credentials, default_project = google.auth.default()
+        
+        # Using the lower-level REST API via the discovery service
+        service = discovery.build('compute', 'v1', credentials=credentials)
+        
+        # List of common image projects
+        image_projects = ['debian-cloud', 'ubuntu-os-cloud', 'centos-cloud', 'cos-cloud']
+        
+        # If project_id is specified, use only that project
+        if project_id:
+            image_projects = [project_id]
+        
+        images = []
+        
+        for project in image_projects:
+            request = service.images().list(project=project)
+            while request is not None:
+                response = request.execute()
+                
+                for image in response.get('items', []):
+                    # Filter by family if specified
+                    if family and image.get('family') != family:
+                        continue
+                        
+                    images.append({
+                        'Name': image['name'],
+                        'Project': project,
+                        'Family': image.get('family', 'N/A'),
+                        'Status': image['status'],
+                        'CreationTime': image['creationTimestamp'],
+                        'DiskSizeGb': image.get('diskSizeGb', 'N/A'),
+                        'Description': image.get('description', ''),
+                        'SelfLink': image['selfLink']
+                    })
+                
+                request = service.images().list_next(previous_request=request, previous_response=response)
+        
+        # Sort by creation time (newest first)
+        images.sort(key=lambda x: x['CreationTime'], reverse=True)
+        
+        return json.dumps(images, indent=2)
+    except Exception as e:
+        return json.dumps({
+            'Status': 'Error',
+            'Message': str(e)
+        }, indent=2)
 
 @mcp.tool()
 def start_gce_instance(instance_name: str, zone: str, project_id: Optional[str] = None) -> str:
@@ -228,13 +254,13 @@ def start_gce_instance(instance_name: str, zone: str, project_id: Optional[str] 
     Returns:
         JSON string with result information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    # Using the lower-level REST API via the discovery service
-    service = discovery.build('compute', 'v1', credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        # Using the lower-level REST API via the discovery service
+        service = discovery.build('compute', 'v1', credentials=credentials)
+        
         operation = service.instances().start(project=project, zone=zone, instance=instance_name).execute()
         
         return json.dumps({
@@ -262,13 +288,13 @@ def stop_gce_instance(instance_name: str, zone: str, project_id: Optional[str] =
     Returns:
         JSON string with result information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    # Using the lower-level REST API via the discovery service
-    service = discovery.build('compute', 'v1', credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        # Using the lower-level REST API via the discovery service
+        service = discovery.build('compute', 'v1', credentials=credentials)
+        
         operation = service.instances().stop(project=project, zone=zone, instance=instance_name).execute()
         
         return json.dumps({
@@ -312,13 +338,13 @@ def create_gce_instance(
     Returns:
         JSON string with instance information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    # Using the lower-level REST API via the discovery service
-    service = discovery.build('compute', 'v1', credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        # Using the lower-level REST API via the discovery service
+        service = discovery.build('compute', 'v1', credentials=credentials)
+        
         # Get the latest image from the family
         image_response = service.images().getFromFamily(
             project=image_project,
@@ -396,13 +422,13 @@ def list_firewall_rules(project_id: Optional[str] = None) -> str:
     Returns:
         JSON string with firewall rule information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    # Using the lower-level REST API via the discovery service
-    service = discovery.build('compute', 'v1', credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        # Using the lower-level REST API via the discovery service
+        service = discovery.build('compute', 'v1', credentials=credentials)
+        
         request = service.firewalls().list(project=project)
         response = request.execute()
         
@@ -457,13 +483,12 @@ def list_cloud_functions(project_id: Optional[str] = None, region: str = "us-cen
     Returns:
         JSON string with Cloud Functions information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    from google.cloud import functions_v1
-    client = functions_v1.CloudFunctionsServiceClient(credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        client = functions_v1.CloudFunctionsServiceClient(credentials=credentials)
+        
         parent = f'projects/{project}/locations/{region}'
         functions = client.list_functions(request={"parent": parent})
         
@@ -505,13 +530,12 @@ def list_bigquery_datasets(project_id: Optional[str] = None) -> str:
     Returns:
         JSON string with dataset information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    from google.cloud import bigquery
-    client = bigquery.Client(project=project, credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        client = bigquery.Client(project=project, credentials=credentials)
+        
         datasets = list(client.list_datasets())
         
         dataset_list = []
@@ -543,13 +567,12 @@ def list_bigquery_tables(dataset_id: str, project_id: Optional[str] = None) -> s
     Returns:
         JSON string with table information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    from google.cloud import bigquery
-    client = bigquery.Client(project=project, credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        client = bigquery.Client(project=project, credentials=credentials)
+        
         tables = list(client.list_tables(f"{project}.{dataset_id}"))
         
         table_list = []
@@ -582,18 +605,17 @@ def list_gke_clusters(project_id: Optional[str] = None, zone: Optional[str] = No
     Returns:
         JSON string with cluster information
     """
-    credentials, default_project = google.auth.default()
-    project = project_id or default_project
-    
-    from google.cloud.container_v1 import ClusterManagerClient
-    client = ClusterManagerClient(credentials=credentials)
-    
     try:
+        credentials, default_project = google.auth.default()
+        project = project_id or default_project
+        
+        client = ClusterManagerClient(credentials=credentials)
+        
         if zone:
             parent = f"projects/{project}/locations/{zone}"
         else:
             parent = f"projects/{project}/locations/-"
-            
+                
         clusters = client.list_clusters(parent=parent)
         
         cluster_list = []
@@ -630,10 +652,11 @@ def run_gcp_code(code: str, imports: Optional[str] = "from google.cloud import s
     Returns:
         Output from the executed code
     """
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(suffix='.py', delete=False) as temp:
-        # Write code to file with imports and print capturing
-        full_code = f"""
+    try:
+        # Create a temporary file
+        with tempfile.NamedTemporaryFile(suffix='.py', delete=False) as temp:
+            # Write code to file with imports and print capturing
+            full_code = f"""
 {imports}
 import sys
 import json
@@ -685,10 +708,9 @@ output = captured_output.getvalue()
 with open('{temp.name}.out', 'w') as f:
     f.write(output)
 """
-        temp.write(full_code.encode('utf-8'))
-        temp_name = temp.name
+            temp.write(full_code.encode('utf-8'))
+            temp_name = temp.name
 
-    try:
         # Execute the code
         subprocess.run(['python', temp_name], timeout=30)
         

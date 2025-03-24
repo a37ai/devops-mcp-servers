@@ -24,6 +24,9 @@ TEST_DOC_ID = "test-doc-1"
 TEST_PIPELINE_ID = "test-pipeline"
 TEST_TEMPLATE_NAME = "test-template"
 
+# Detect if we're running in serverless mode
+is_serverless = None
+
 def print_result(operation: str, result: Any):
     """Print the result of an operation in a readable format."""
     logger.info(f"Result of {operation}:")
@@ -38,6 +41,28 @@ def print_result(operation: str, result: Any):
         print(json.dumps(result, indent=2) if isinstance(result, dict) else result)
     
     print("-" * 80)
+
+async def detect_serverless():
+    """Detect if we're running in serverless mode."""
+    global is_serverless
+    result = await cluster_info()
+    
+    try:
+        if isinstance(result, str):
+            try:
+                info = json.loads(result)
+            except:
+                info = {}
+        else:
+            info = result
+            
+        is_serverless = info.get("version", {}).get("build_flavor") == "serverless"
+        logger.info(f"Detected Elasticsearch running in {'serverless' if is_serverless else 'standard'} mode")
+    except Exception as e:
+        logger.error(f"Error detecting serverless mode: {e}")
+        is_serverless = False
+        
+    return is_serverless
 
 async def test_cluster_apis():
     """Test the cluster-related APIs."""
@@ -96,14 +121,19 @@ async def test_index_apis():
     """Test the index-related APIs."""
     logger.info("Testing Index APIs...")
     
+    # Create index settings based on mode
+    settings = {}
+    if not is_serverless:
+        settings = {
+            "number_of_shards": 1,
+            "number_of_replicas": 0
+        }
+    
     # Test create_index
     logger.info(f"Testing create_index ({TEST_INDEX_NAME})...")
     result = await create_index(
         index_name=TEST_INDEX_NAME,
-        settings={
-            "number_of_shards": 1,
-            "number_of_replicas": 0
-        },
+        settings=settings,
         mappings={
             "properties": {
                 "name": {"type": "text"},
@@ -270,22 +300,27 @@ async def test_template_apis():
     """Test the template-related APIs."""
     logger.info("Testing Template APIs...")
     
+    # Create template settings based on mode
+    template = {
+        "mappings": {
+            "properties": {
+                "field1": {"type": "keyword"},
+                "field2": {"type": "text"}
+            }
+        }
+    }
+    
+    if not is_serverless:
+        template["settings"] = {
+            "number_of_shards": 1
+        }
+    
     # Test create_index_template
     logger.info(f"Testing create_index_template ({TEST_TEMPLATE_NAME})...")
     result = await create_index_template(
         name=TEST_TEMPLATE_NAME,
         index_patterns=["test-*"],
-        template={
-            "settings": {
-                "number_of_shards": 1
-            },
-            "mappings": {
-                "properties": {
-                    "field1": {"type": "keyword"},
-                    "field2": {"type": "text"}
-                }
-            }
-        },
+        template=template,
         version=1,
         priority=100
     )
@@ -334,7 +369,10 @@ async def cleanup():
 async def run_tests():
     """Run all tests."""
     try:
-        # First, test cluster and info APIs which don't modify anything
+        # First, detect if we're running in serverless mode
+        await detect_serverless()
+        
+        # Then, test cluster and info APIs which don't modify anything
         await test_cluster_apis()
         await test_info_apis()
         

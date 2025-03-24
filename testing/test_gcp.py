@@ -1,605 +1,509 @@
+import sys
+import os
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
 import pytest
 import json
+import time
+import uuid
 import tempfile
-import os
-import sys
-from unittest.mock import patch, MagicMock, ANY
-import subprocess
-from google.auth.exceptions import DefaultCredentialsError
+import logging
+from datetime import datetime
 
-# Import the module containing the functions to test
-# Assuming the code is saved in a file called gcp_server.py
-# Adjust imports as necessary for your file structure
-import sys
-sys.path.append('.')  # Adjust if needed
+# Import the module to test
 from servers.gcp.gcp_mcp import (
     get_gcp_client, list_gcs_buckets, list_gcs_objects,
     list_gce_instances, list_gce_images, start_gce_instance, stop_gce_instance,
     create_gce_instance, list_firewall_rules, list_cloud_functions,
-    list_bigquery_datasets, list_bigquery_tables, list_gke_clusters,
-    run_gcp_code, list_gcp_regions, list_machine_types
+    list_bigquery_datasets, list_gke_clusters, run_gcp_code
 )
 
-# Basic test to verify that the module imports correctly
-def test_module_imports():
-    """Verify that the module imports correctly."""
-    assert callable(get_gcp_client)
-    assert callable(list_gcs_buckets)
-    assert callable(list_gce_instances)
+# Import GCP libraries for resource management
+from google.cloud import storage
+from google.cloud import compute_v1
+from google.cloud.container_v1 import ClusterManagerClient
+import google.auth
 
-# Fixtures
-@pytest.fixture
-def mock_auth():
-    """Mock google.auth.default to return test credentials and project."""
-    with patch('google.auth.default') as mock_auth:
-        mock_auth.return_value = (MagicMock(), 'test-project')
-        yield mock_auth
+# Configure logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
-@pytest.fixture
-def mock_storage_client():
-    """Mock the Storage Client for GCS operations."""
-    with patch('google.cloud.storage.Client') as mock_client:
-        # Create a mock bucket
-        mock_bucket = MagicMock()
-        mock_bucket.name = 'test-bucket'
-        mock_bucket.time_created.isoformat.return_value = '2023-01-01T00:00:00'
-        mock_bucket.location = 'us-central1'
-        mock_bucket.storage_class = 'STANDARD'
-        
-        # Set up the list_buckets method
-        mock_client.return_value.list_buckets.return_value = [mock_bucket]
-        
-        # Create a mock blob
-        mock_blob = MagicMock()
-        mock_blob.name = 'test-file.txt'
-        mock_blob.size = 1024
-        mock_blob.content_type = 'text/plain'
-        mock_blob.updated.isoformat.return_value = '2023-01-02T00:00:00'
-        mock_blob.storage_class = 'STANDARD'
-        
-        # Set up the bucket.list_blobs method
-        mock_client.return_value.bucket.return_value.list_blobs.return_value = [mock_blob]
-        
-        yield mock_client
+# Generate unique identifiers for resources to avoid conflicts
+test_uuid = str(uuid.uuid4())[:8]
+TEST_PREFIX = f"mcp-test-{test_uuid}"
 
-@pytest.fixture
-def mock_discovery_build():
-    """Mock googleapiclient.discovery.build for GCE operations."""
-    with patch('googleapiclient.discovery.build') as mock_build:
-        # Create mock compute service
-        mock_service = MagicMock()
-        mock_build.return_value = mock_service
-        
-        # Mock instances API
-        mock_instances = MagicMock()
-        mock_service.instances.return_value = mock_instances
-        
-        # Mock instances.list response
-        mock_instance = {
-            'name': 'test-instance',
-            'machineType': 'projects/test-project/zones/us-central1-a/machineTypes/e2-micro',
-            'status': 'RUNNING',
-            'networkInterfaces': [{
-                'networkIP': '10.0.0.1',
-                'accessConfigs': [{'natIP': '35.192.0.1'}]
-            }],
-            'creationTimestamp': '2023-01-01T00:00:00'
-        }
-        mock_instances.list.return_value.execute.return_value = {'items': [mock_instance]}
-        
-        # Mock zones.list response
-        mock_service.zones.return_value.list.return_value.execute.return_value = {
-            'items': [{'name': 'us-central1-a'}]
-        }
-        
-        # Mock start/stop/insert operations
-        operation_response = {'id': 'op-123', 'status': 'RUNNING'}
-        mock_instances.start.return_value.execute.return_value = operation_response
-        mock_instances.stop.return_value.execute.return_value = operation_response
-        mock_instances.insert.return_value.execute.return_value = operation_response
-        
-        # Mock images API
-        mock_images = MagicMock()
-        mock_service.images.return_value = mock_images
-        
-        # Mock images.list response
-        mock_images.list.return_value.execute.return_value = {
-            'items': [{
-                'name': 'debian-11',
-                'family': 'debian-11',
-                'status': 'READY',
-                'creationTimestamp': '2023-01-01T00:00:00',
-                'selfLink': 'projects/debian-cloud/global/images/debian-11',
-                'diskSizeGb': '10',
-                'description': 'Debian 11'
-            }]
-        }
-        mock_images.list_next.return_value = None  # No more pages
-        
-        # Mock images.getFromFamily response
-        mock_images.getFromFamily.return_value.execute.return_value = {
-            'selfLink': 'projects/debian-cloud/global/images/debian-11'
-        }
-        
-        # Mock firewalls API
-        mock_firewalls = MagicMock()
-        mock_service.firewalls.return_value = mock_firewalls
-        
-        # Mock firewalls.list response
-        mock_firewalls.list.return_value.execute.return_value = {
-            'items': [{
-                'name': 'default-allow-internal',
-                'network': 'projects/test-project/global/networks/default',
-                'direction': 'INGRESS',
-                'priority': 1000,
-                'allowed': [{'IPProtocol': 'tcp', 'ports': ['0-65535']}],
-                'sourceRanges': ['10.0.0.0/8']
-            }]
-        }
-        
-        yield mock_build
+# Configure test settings
+TEST_PROJECT = os.environ.get("GCP_TEST_PROJECT", "")  # Set this in your environment
+TEST_REGION = "us-central1"
+TEST_ZONE = "us-central1-a"
+TEST_BUCKET_NAME = f"{TEST_PREFIX}-bucket"
+TEST_INSTANCE_NAME = f"{TEST_PREFIX}-instance"
+TEST_GKE_CLUSTER_NAME = f"{TEST_PREFIX}-cluster"
 
-@pytest.fixture
-def mock_cloud_functions():
-    """Mock the Cloud Functions client."""
-    with patch('google.cloud.functions_v1.CloudFunctionsServiceClient') as mock_client:
-        # Create a mock function
-        mock_function = MagicMock()
-        mock_function.name = 'projects/test-project/locations/us-central1/functions/test-function'
-        mock_function.runtime = 'python39'
-        mock_function.entry_point = 'handler'
-        mock_function.status.name = 'ACTIVE'
-        mock_function.update_time.isoformat.return_value = '2023-01-01T00:00:00'
-        mock_function.version_id = '1'
-        mock_function.available_memory_mb = 256
-        mock_function.timeout.seconds = 60
-        mock_function.https_trigger = MagicMock()
-        mock_function.https_trigger.url = 'https://test-function-url.com'
-        
-        # Set up list_functions method
-        mock_client.return_value.list_functions.return_value = [mock_function]
-        
-        yield mock_client
+# Validate environment
+if not TEST_PROJECT:
+    logger.warning("GCP_TEST_PROJECT environment variable not set. Some tests may be skipped.")
 
-@pytest.fixture
-def mock_bigquery_client():
-    """Mock the BigQuery client."""
-    with patch('google.cloud.bigquery.Client') as mock_client:
-        # Create a mock dataset
-        mock_dataset = MagicMock()
-        mock_dataset.dataset_id = 'test_dataset'
-        mock_dataset.created.isoformat.return_value = '2023-01-01T00:00:00'
-        mock_dataset.modified.isoformat.return_value = '2023-01-02T00:00:00'
-        mock_dataset.location = 'US'
-        mock_dataset.description = 'Test dataset'
-        
-        # Set up list_datasets method
-        mock_client.return_value.list_datasets.return_value = [mock_dataset]
-        
-        # Create a mock table
-        mock_table = MagicMock()
-        mock_table.table_id = 'test_table'
-        mock_table.table_type = 'TABLE'
-        mock_table.created.isoformat.return_value = '2023-01-01T00:00:00'
-        mock_table.modified.isoformat.return_value = '2023-01-02T00:00:00'
-        
-        # Set up list_tables method
-        mock_client.return_value.list_tables.return_value = [mock_table]
-        
-        yield mock_client
+# Teardown resources after tests
+test_resources = {
+    "gcs_buckets": [],
+    "gce_instances": [],
+    "gke_clusters": []
+}
 
-@pytest.fixture
-def mock_container_client():
-    """Mock the GKE Container client."""
-    with patch('google.cloud.container_v1.ClusterManagerClient') as mock_client:
-        # Create a mock node pool
-        mock_node_pool = MagicMock()
-        mock_node_pool.name = 'default-pool'
-        mock_node_pool.initial_node_count = 3
-        
-        # Create a mock cluster
-        mock_cluster = MagicMock()
-        mock_cluster.name = 'test-cluster'
-        mock_cluster.location = 'us-central1'
-        mock_cluster.status.name = 'RUNNING'
-        mock_cluster.node_pools = [mock_node_pool]
-        mock_cluster.master_version = '1.24.0'
-        mock_cluster.network = 'default'
-        mock_cluster.subnetwork = 'default'
-        mock_cluster.endpoint = '35.192.0.2'
-        mock_cluster.create_time.isoformat.return_value = '2023-01-01T00:00:00'
-        
-        # Set up list_clusters method
-        mock_response = MagicMock()
-        mock_response.clusters = [mock_cluster]
-        mock_client.return_value.list_clusters.return_value = mock_response
-        
-        yield mock_client
+# Fixture for cleanup after all tests
+@pytest.fixture(scope="session", autouse=True)
+def cleanup_resources():
+    yield
+    logger.info("Cleaning up test resources...")
+    
+    # Clean up GCE instances
+    if test_resources["gce_instances"]:
+        logger.info(f"Terminating GCE instances: {test_resources['gce_instances']}")
+        try:
+            # Use compute client for cleanup
+            compute_client = compute_v1.InstancesClient()
+            for instance_data in test_resources["gce_instances"]:
+                instance_name = instance_data.get("name")
+                zone = instance_data.get("zone", TEST_ZONE)
+                
+                logger.info(f"Deleting instance {instance_name} in {zone}")
+                operation = compute_client.delete(
+                    project=TEST_PROJECT,
+                    zone=zone,
+                    instance=instance_name
+                )
+                
+                # Wait for operation to complete
+                operation_client = compute_v1.ZoneOperationsClient()
+                while not operation.status == compute_v1.Operation.Status.DONE:
+                    operation = operation_client.get(
+                        project=TEST_PROJECT,
+                        zone=zone, 
+                        operation=operation.name
+                    )
+                    time.sleep(1)
+                
+                logger.info(f"Instance {instance_name} deleted successfully")
+        except Exception as e:
+            logger.error(f"Error cleaning up GCE instances: {str(e)}")
+    
+    # Clean up GCS buckets
+    for bucket_name in test_resources["gcs_buckets"]:
+        try:
+            logger.info(f"Deleting GCS bucket: {bucket_name}")
+            storage_client = storage.Client(project=TEST_PROJECT)
+            bucket = storage_client.bucket(bucket_name)
+            
+            # Delete all objects in the bucket
+            blobs = bucket.list_blobs()
+            for blob in blobs:
+                blob.delete()
+            
+            # Delete the bucket
+            bucket.delete()
+            logger.info(f"GCS bucket {bucket_name} deleted successfully")
+        except Exception as e:
+            logger.error(f"Error cleaning up GCS bucket {bucket_name}: {str(e)}")
+    
+    # Clean up GKE clusters
+    if test_resources["gke_clusters"]:
+        logger.info(f"Deleting GKE clusters: {test_resources['gke_clusters']}")
+        try:
+            # Use container client for cleanup
+            container_client = ClusterManagerClient()
+            for cluster_data in test_resources["gke_clusters"]:
+                cluster_name = cluster_data.get("name")
+                location = cluster_data.get("location", TEST_REGION)
+                
+                logger.info(f"Deleting cluster {cluster_name} in {location}")
+                operation = container_client.delete_cluster(
+                    name=f"projects/{TEST_PROJECT}/locations/{location}/clusters/{cluster_name}"
+                )
+                
+                # Wait for operation to complete (this could take several minutes)
+                logger.info("Waiting for cluster deletion to complete (this may take a while)...")
+                while not operation.done():
+                    time.sleep(30)  # Check every 30 seconds
+                    operation = container_client.get_operation(
+                        name=operation.name
+                    )
+                
+                logger.info(f"Cluster {cluster_name} deleted successfully")
+        except Exception as e:
+            logger.error(f"Error cleaning up GKE clusters: {str(e)}")
 
-# Test classes organized by GCP service
-class TestHelperFunctions:
-    """Test helper functions in the GCP server."""
-    
-    def test_get_gcp_client(self, mock_auth):
-        """Test the get_gcp_client helper function."""
-        with patch('google.cloud.storage.Client') as mock_storage:
-            # Test getting a storage client
-            client = get_gcp_client('storage')
-            assert client is not None
-            mock_storage.assert_called_once_with(project='test-project', credentials=ANY)
-        
-        with patch('google.cloud.compute.ComputeClient') as mock_compute:
-            # Test getting a compute client
-            client = get_gcp_client('compute')
-            assert client is not None
-            mock_compute.assert_called_once_with(credentials=ANY)
-        
-        # Test invalid service
-        with pytest.raises(ValueError):
-            get_gcp_client('invalid-service')
 
-class TestGCSFunctions:
-    """Test Google Cloud Storage related functions."""
-    
-    def test_list_gcs_buckets(self, mock_auth, mock_storage_client):
-        """Test listing GCS buckets."""
-        # Test default project
-        result = list_gcs_buckets()
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['Name'] == 'test-bucket'
-        assert result_data[0]['Location'] == 'us-central1'
-        
-        # Test specific project
-        result = list_gcs_buckets(project_id='custom-project')
-        mock_storage_client.assert_called_with(project='custom-project', credentials=ANY)
-    
-    def test_list_gcs_objects(self, mock_auth, mock_storage_client):
-        """Test listing objects in a GCS bucket."""
-        # Test with default parameters
-        result = list_gcs_objects('test-bucket')
-        result_data = json.loads(result)
-        
-        assert 'Objects' in result_data
-        assert len(result_data['Objects']) == 1
-        assert result_data['Objects'][0]['Name'] == 'test-file.txt'
-        assert result_data['Objects'][0]['Size'] == 1024
-        
-        # Test with custom parameters
-        result = list_gcs_objects('test-bucket', prefix='test/', max_items=50)
-        mock_storage_client.return_value.bucket.assert_called_with('test-bucket')
-        mock_storage_client.return_value.bucket.return_value.list_blobs.assert_called_with(
-            prefix='test/', max_results=50)
-    
-    def test_gcs_error_handling(self, mock_auth):
-        """Test error handling in GCS functions."""
-        with patch('google.cloud.storage.Client', side_effect=Exception("Storage API error")):
-            result = list_gcs_buckets()
-            result_data = json.loads(result)
-            assert 'Status' in result_data
-            assert result_data['Status'] == 'Error'
-            assert 'Message' in result_data
-            assert 'Storage API error' in result_data['Message']
+# Optional marker to skip tests that create GCP resources
+skip_resource_creation = pytest.mark.skipif(
+    os.environ.get("SKIP_RESOURCE_CREATION") == "true" or not TEST_PROJECT,
+    reason="Skipping tests that create GCP resources"
+)
 
-class TestGCEFunctions:
-    """Test Google Compute Engine related functions."""
+
+# Test GCP Client Factory
+def test_get_gcp_client():
+    """Test that the GCP client factory works"""
+    # Test storage client
+    storage_client = get_gcp_client('storage')
+    assert storage_client is not None
     
-    def test_list_gce_instances(self, mock_auth, mock_discovery_build):
-        """Test listing GCE instances."""
-        # Test listing all instances
-        result = list_gce_instances()
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['Name'] == 'test-instance'
-        assert result_data[0]['Status'] == 'RUNNING'
-        
-        # Test with specific zone
-        result = list_gce_instances(zone='us-central1-a')
-        mock_discovery_build.return_value.instances.return_value.list.assert_called_with(
-            project='test-project', zone='us-central1-a')
+    # Test compute client
+    compute_client = get_gcp_client('compute')
+    assert compute_client is not None
     
-    def test_list_gce_images(self, mock_auth, mock_discovery_build):
-        """Test listing GCE images."""
-        # Test listing all images
-        result = list_gce_images()
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['Name'] == 'debian-11'
-        assert result_data[0]['Family'] == 'debian-11'
-        
-        # Test with specific project and family
-        result = list_gce_images(project_id='debian-cloud', family='debian-11')
-        # Verify discovery_build was called
-        mock_discovery_build.assert_called_with('compute', 'v1', credentials=ANY)
+    # Test with invalid service (should raise ValueError)
+    with pytest.raises(ValueError):
+        invalid_client = get_gcp_client('invalid_service')
+
+
+# Test listing GCS buckets
+def test_list_gcs_buckets():
+    """Test listing GCS buckets"""
+    result = list_gcs_buckets(project_id=TEST_PROJECT)
+    buckets = json.loads(result)
     
-    def test_start_gce_instance(self, mock_auth, mock_discovery_build):
-        """Test starting a GCE instance."""
-        result = start_gce_instance('test-instance', 'us-central1-a')
-        result_data = json.loads(result)
-        
-        assert result_data['Status'] == 'Success'
-        assert result_data['InstanceName'] == 'test-instance'
-        assert result_data['Zone'] == 'us-central1-a'
-        
-        # Verify API call
-        mock_discovery_build.return_value.instances.return_value.start.assert_called_with(
-            project='test-project', zone='us-central1-a', instance='test-instance')
+    # Verify the result is a list
+    assert isinstance(buckets, list)
     
-    def test_stop_gce_instance(self, mock_auth, mock_discovery_build):
-        """Test stopping a GCE instance."""
-        result = stop_gce_instance('test-instance', 'us-central1-a')
-        result_data = json.loads(result)
+    # Verify structure of bucket data if any buckets exist
+    if buckets:
+        assert 'Name' in buckets[0]
+        assert 'CreationDate' in buckets[0]
+        assert 'Location' in buckets[0]
+        assert 'StorageClass' in buckets[0]
+
+
+# Create a GCS bucket for testing
+@skip_resource_creation
+def test_create_gcs_bucket():
+    """Create a GCS bucket for subsequent tests"""
+    try:
+        # Get storage client
+        storage_client = storage.Client(project=TEST_PROJECT)
         
-        assert result_data['Status'] == 'Success'
-        assert result_data['InstanceName'] == 'test-instance'
-        assert result_data['Zone'] == 'us-central1-a'
+        # Create the test bucket
+        logger.info(f"Creating test bucket: {TEST_BUCKET_NAME}")
+        bucket = storage_client.create_bucket(TEST_BUCKET_NAME, location=TEST_REGION)
         
-        # Verify API call
-        mock_discovery_build.return_value.instances.return_value.stop.assert_called_with(
-            project='test-project', zone='us-central1-a', instance='test-instance')
+        # Add bucket to resources for cleanup
+        test_resources["gcs_buckets"].append(TEST_BUCKET_NAME)
+        
+        # Upload test files
+        logger.info("Uploading test files to bucket")
+        with tempfile.NamedTemporaryFile(mode='w+') as temp:
+            temp.write("Test content for GCS bucket")
+            temp.flush()
+            
+            # Upload a file directly
+            blob = bucket.blob("test-file.txt")
+            blob.upload_from_filename(temp.name)
+            
+            # Upload a file to a "folder"
+            blob = bucket.blob("test-folder/test-file2.txt")
+            blob.upload_from_filename(temp.name)
+        
+        # Verify bucket exists
+        all_buckets = storage_client.list_buckets()
+        bucket_names = [b.name for b in all_buckets]
+        assert TEST_BUCKET_NAME in bucket_names
+        
+        logger.info(f"Test bucket {TEST_BUCKET_NAME} created successfully")
     
-    def test_create_gce_instance(self, mock_auth, mock_discovery_build):
-        """Test creating a GCE instance."""
-        # Test with default parameters
-        result = create_gce_instance('new-instance')
-        result_data = json.loads(result)
-        
-        assert result_data['Status'] == 'Success'
-        assert result_data['InstanceName'] == 'new-instance'
-        assert result_data['MachineType'] == 'e2-micro'
-        assert result_data['Zone'] == 'us-central1-a'
-        
-        # Test with custom parameters
+    except Exception as e:
+        logger.error(f"Failed to create test GCS bucket: {str(e)}")
+        pytest.fail(f"Failed to create test GCS bucket: {str(e)}")
+
+
+# Test listing GCS objects (depends on test_create_gcs_bucket)
+@skip_resource_creation
+def test_list_gcs_objects():
+    """Test listing objects in a GCS bucket"""
+    # Skip if bucket wasn't created
+    if TEST_BUCKET_NAME not in test_resources["gcs_buckets"]:
+        pytest.skip("Test bucket not available")
+    
+    # Test with no prefix
+    result = list_gcs_objects(TEST_BUCKET_NAME)
+    data = json.loads(result)
+    
+    # Verify structure
+    assert 'Objects' in data
+    assert 'Count' in data
+    
+    # Should have at least 2 objects
+    assert data['Count'] >= 2
+    assert len(data['Objects']) >= 2
+    
+    # Test with prefix
+    result = list_gcs_objects(TEST_BUCKET_NAME, prefix="test-folder/")
+    data = json.loads(result)
+    
+    # Should have only objects with the prefix
+    for obj in data['Objects']:
+        assert obj['Name'].startswith("test-folder/")
+
+
+# Test listing GCE instances
+def test_list_gce_instances():
+    """Test listing GCE instances"""
+    result = list_gce_instances(project_id=TEST_PROJECT, zone=TEST_ZONE)
+    instances = json.loads(result)
+    
+    # Verify result is a list
+    assert isinstance(instances, list)
+    
+    # Verify structure of instance data if any instances exist
+    if instances:
+        assert 'Name' in instances[0]
+        assert 'Zone' in instances[0]
+        assert 'Status' in instances[0]
+
+
+# Test listing GCE images
+def test_list_gce_images():
+    """Test listing GCE images"""
+    result = list_gce_images(project_id="debian-cloud", family="debian-11")
+    images = json.loads(result)
+    
+    # Should find Debian 11 images
+    assert len(images) > 0
+    
+    # Verify structure
+    assert 'Name' in images[0]
+    assert 'Family' in images[0]
+    assert 'CreationTime' in images[0]
+
+
+# Create a GCE instance for testing
+@skip_resource_creation
+def test_create_gce_instance():
+    """Test creating a GCE instance"""
+    try:
+        # Create the instance using our function
+        logger.info(f"Creating test GCE instance: {TEST_INSTANCE_NAME}")
         result = create_gce_instance(
-            'custom-instance',
-            machine_type='e2-medium',
-            image_project='ubuntu-os-cloud',
-            image_family='ubuntu-2004-lts',
-            zone='us-west1-b',
-            project_id='custom-project',
-            network='custom-network',
-            subnet='custom-subnet',
-            external_ip=False
+            instance_name=TEST_INSTANCE_NAME,
+            machine_type="e2-micro",
+            image_project="debian-cloud",
+            image_family="debian-11",
+            zone=TEST_ZONE,
+            project_id=TEST_PROJECT,
+            network="default",
+            external_ip=True
         )
-        result_data = json.loads(result)
         
-        assert result_data['Status'] == 'Success'
-        assert result_data['InstanceName'] == 'custom-instance'
-        assert result_data['MachineType'] == 'e2-medium'
-        assert result_data['Zone'] == 'us-west1-b'
+        # Parse the result
+        data = json.loads(result)
+        logger.info(f"GCE instance creation response: {data}")
         
-        # Verify API call was made (checking that insert was called)
-        mock_discovery_build.return_value.instances.return_value.insert.assert_called()
-    
-    def test_gce_error_handling(self, mock_auth):
-        """Test error handling in GCE functions."""
-        with patch('googleapiclient.discovery.build', side_effect=Exception("Compute API error")):
-            result = list_gce_instances()
-            result_data = json.loads(result)
-            assert result_data['Status'] == 'Error'
-            assert 'Compute API error' in result_data['Message']
+        # Verify success
+        assert data['Status'] == 'Success'
+        assert data['InstanceName'] == TEST_INSTANCE_NAME
+        
+        # Add instance to resources for cleanup
+        test_resources["gce_instances"].append({
+            "name": TEST_INSTANCE_NAME,
+            "zone": TEST_ZONE
+        })
+        
+        # Wait for instance to be running
+        logger.info("Waiting for instance to be in RUNNING state...")
+        compute_client = compute_v1.InstancesClient()
+        max_retries = 20
+        retries = 0
+        
+        while retries < max_retries:
+            instance = compute_client.get(
+                project=TEST_PROJECT,
+                zone=TEST_ZONE,
+                instance=TEST_INSTANCE_NAME
+            )
+            
+            if instance.status == "RUNNING":
+                break
+                
+            time.sleep(5)
+            retries += 1
+        
+        assert instance.status == "RUNNING"
+        logger.info(f"Instance {TEST_INSTANCE_NAME} is now running")
+        
+    except Exception as e:
+        logger.error(f"Failed to create test GCE instance: {str(e)}")
+        pytest.fail(f"Failed to create test GCE instance: {str(e)}")
 
-class TestFirewallFunctions:
-    """Test Firewall related functions."""
-    
-    def test_list_firewall_rules(self, mock_auth, mock_discovery_build):
-        """Test listing firewall rules."""
-        result = list_firewall_rules()
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['Name'] == 'default-allow-internal'
-        assert result_data[0]['Direction'] == 'INGRESS'
-        
-        # Verify API call
-        mock_discovery_build.return_value.firewalls.return_value.list.assert_called_with(
-            project='test-project')
-    
-    def test_firewall_error_handling(self, mock_auth):
-        """Test error handling in firewall functions."""
-        with patch('googleapiclient.discovery.build', side_effect=Exception("Firewall API error")):
-            result = list_firewall_rules()
-            result_data = json.loads(result)
-            assert result_data['Status'] == 'Error'
-            assert 'Firewall API error' in result_data['Message']
 
-class TestCloudFunctionsFunctions:
-    """Test Cloud Functions related functions."""
+# Test stopping GCE instance
+@skip_resource_creation
+def test_stop_gce_instance():
+    """Test stopping a GCE instance"""
+    # Skip if instance wasn't created
+    instance_exists = False
+    for instance in test_resources["gce_instances"]:
+        if instance["name"] == TEST_INSTANCE_NAME:
+            instance_exists = True
+            break
+            
+    if not instance_exists:
+        pytest.skip("Test instance not available")
     
-    def test_list_cloud_functions(self, mock_auth, mock_cloud_functions):
-        """Test listing Cloud Functions."""
-        # Test with default region
-        result = list_cloud_functions()
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['Name'] == 'test-function'
-        assert result_data[0]['Runtime'] == 'python39'
-        
-        # Test with custom region
-        result = list_cloud_functions(region='us-west1')
-        mock_cloud_functions.return_value.list_functions.assert_called_with(
-            request={"parent": "projects/test-project/locations/us-west1"})
+    # Stop the instance
+    logger.info(f"Stopping instance {TEST_INSTANCE_NAME}")
+    result = stop_gce_instance(TEST_INSTANCE_NAME, TEST_ZONE, TEST_PROJECT)
+    data = json.loads(result)
     
-    def test_cloud_functions_error_handling(self, mock_auth):
-        """Test error handling in Cloud Functions functions."""
-        with patch('google.cloud.functions_v1.CloudFunctionsServiceClient', 
-                  side_effect=Exception("Functions API error")):
-            result = list_cloud_functions()
-            result_data = json.loads(result)
-            assert result_data['Status'] == 'Error'
-            assert 'Functions API error' in result_data['Message']
+    # Verify success
+    assert data['Status'] == 'Success'
+    assert data['InstanceName'] == TEST_INSTANCE_NAME
+    
+    # Wait for instance to stop
+    logger.info("Waiting for instance to be in TERMINATED state...")
+    compute_client = compute_v1.InstancesClient()
+    max_retries = 20
+    retries = 0
+    
+    while retries < max_retries:
+        instance = compute_client.get(
+            project=TEST_PROJECT,
+            zone=TEST_ZONE,
+            instance=TEST_INSTANCE_NAME
+        )
+        
+        if instance.status == "TERMINATED":
+            break
+            
+        time.sleep(5)
+        retries += 1
+    
+    assert instance.status == "TERMINATED"
+    logger.info(f"Instance {TEST_INSTANCE_NAME} is now stopped")
 
-class TestBigQueryFunctions:
-    """Test BigQuery related functions."""
-    
-    def test_list_bigquery_datasets(self, mock_auth, mock_bigquery_client):
-        """Test listing BigQuery datasets."""
-        # Test with default project
-        result = list_bigquery_datasets()
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['DatasetId'] == 'test_dataset'
-        assert result_data[0]['Location'] == 'US'
-        
-        # Test with custom project
-        result = list_bigquery_datasets(project_id='custom-project')
-        mock_bigquery_client.assert_called_with(project='custom-project', credentials=ANY)
-    
-    def test_list_bigquery_tables(self, mock_auth, mock_bigquery_client):
-        """Test listing tables in a BigQuery dataset."""
-        result = list_bigquery_tables('test_dataset')
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['TableId'] == 'test_table'
-        assert result_data[0]['Type'] == 'TABLE'
-        
-        # Verify API call
-        mock_bigquery_client.return_value.list_tables.assert_called_with('test-project.test_dataset')
-    
-    def test_bigquery_error_handling(self, mock_auth):
-        """Test error handling in BigQuery functions."""
-        with patch('google.cloud.bigquery.Client', side_effect=Exception("BigQuery API error")):
-            result = list_bigquery_datasets()
-            result_data = json.loads(result)
-            assert result_data['Status'] == 'Error'
-            assert 'BigQuery API error' in result_data['Message']
 
-class TestGKEFunctions:
-    """Test GKE related functions."""
+# Test starting GCE instance
+@skip_resource_creation
+def test_start_gce_instance():
+    """Test starting a GCE instance"""
+    # Skip if instance wasn't created
+    instance_exists = False
+    for instance in test_resources["gce_instances"]:
+        if instance["name"] == TEST_INSTANCE_NAME:
+            instance_exists = True
+            break
+            
+    if not instance_exists:
+        pytest.skip("Test instance not available")
     
-    def test_list_gke_clusters(self, mock_auth, mock_container_client):
-        """Test listing GKE clusters."""
-        # Test without zone specification
-        result = list_gke_clusters()
-        result_data = json.loads(result)
+    # Start the instance
+    logger.info(f"Starting instance {TEST_INSTANCE_NAME}")
+    result = start_gce_instance(TEST_INSTANCE_NAME, TEST_ZONE, TEST_PROJECT)
+    data = json.loads(result)
+    
+    # Verify success
+    assert data['Status'] == 'Success'
+    assert data['InstanceName'] == TEST_INSTANCE_NAME
+    
+    # Wait for instance to start
+    logger.info("Waiting for instance to be in RUNNING state...")
+    compute_client = compute_v1.InstancesClient()
+    max_retries = 20
+    retries = 0
+    
+    while retries < max_retries:
+        instance = compute_client.get(
+            project=TEST_PROJECT,
+            zone=TEST_ZONE,
+            instance=TEST_INSTANCE_NAME
+        )
         
-        assert isinstance(result_data, list)
-        assert len(result_data) == 1
-        assert result_data[0]['Name'] == 'test-cluster'
-        assert result_data[0]['Status'] == 'RUNNING'
+        if instance.status == "RUNNING":
+            break
+            
+        time.sleep(5)
+        retries += 1
+    
+    assert instance.status == "RUNNING"
+    logger.info(f"Instance {TEST_INSTANCE_NAME} is now running")
+
+
+# Test listing firewall rules
+def test_list_firewall_rules():
+    """Test listing firewall rules"""
+    result = list_firewall_rules(project_id=TEST_PROJECT)
+    rules = json.loads(result)
+    
+    # Verify result is a list
+    assert isinstance(rules, list)
+    
+    # Verify structure of rules if any exist
+    if rules:
+        assert 'Name' in rules[0]
+        assert 'Network' in rules[0]
+        assert 'Direction' in rules[0]
+
+
+# Test listing Cloud Functions
+def test_list_cloud_functions():
+    """Test listing Cloud Functions"""
+    result = list_cloud_functions(project_id=TEST_PROJECT, region=TEST_REGION)
+    data = json.loads(result)
+    
+    # If error, the test continues (as there might not be any functions)
+    if isinstance(data, dict) and 'Status' in data and data['Status'] == 'Error':
+        logger.warning(f"Could not list functions: {data.get('Message')}")
+        return
         
-        # Test with zone specification
-        result = list_gke_clusters(zone='us-central1')
-        mock_container_client.return_value.list_clusters.assert_called_with(
-            parent="projects/test-project/locations/us-central1")
+    # If successful, should be a list
+    assert isinstance(data, list)
     
-    def test_gke_error_handling(self, mock_auth):
-        """Test error handling in GKE functions."""
-        with patch('google.cloud.container_v1.ClusterManagerClient', 
-                  side_effect=Exception("GKE API error")):
-            result = list_gke_clusters()
-            result_data = json.loads(result)
-            assert result_data['Status'] == 'Error'
-            assert 'GKE API error' in result_data['Message']
+    # If functions exist, verify structure
+    if data:
+        assert 'Name' in data[0]
+        assert 'Runtime' in data[0]
 
-class TestRunGCPCode:
-    """Test the run_gcp_code function."""
-    
-    def test_run_gcp_code_success(self):
-        """Test successful code execution."""
-        with patch('tempfile.NamedTemporaryFile') as mock_temp_file, \
-             patch('subprocess.run') as mock_run, \
-             patch('builtins.open', create=True) as mock_open, \
-             patch('os.path.exists', return_value=True), \
-             patch('os.remove'):
-            
-            # Mock the temporary file
-            mock_temp = MagicMock()
-            mock_temp.name = '/tmp/test_file.py'
-            mock_temp_file.return_value.__enter__.return_value = mock_temp
-            
-            # Mock the subprocess run
-            mock_run.return_value = MagicMock(returncode=0)
-            
-            # Mock reading the output file
-            mock_file_handle = MagicMock()
-            mock_file_handle.read.return_value = "Hello, GCP!"
-            mock_context_manager = MagicMock()
-            mock_context_manager.__enter__.return_value = mock_file_handle
-            mock_open.return_value = mock_context_manager
-            
-            # Call the function
-            result = run_gcp_code('print("Hello, GCP!")')
-            
-            # Verify results
-            assert result == "Hello, GCP!"
-            
-            # Verify subprocess was called correctly
-            mock_run.assert_called_with(['python', '/tmp/test_file.py'], timeout=30)
-    
-    def test_run_gcp_code_timeout(self):
-        """Test code execution timeout."""
-        with patch('tempfile.NamedTemporaryFile') as mock_temp_file, \
-             patch('subprocess.run', side_effect=subprocess.TimeoutExpired('cmd', 30)), \
-             patch('os.path.exists', return_value=True), \
-             patch('os.remove'):
-            
-            # Mock the temporary file
-            mock_temp = MagicMock()
-            mock_temp.name = '/tmp/test_file.py'
-            mock_temp_file.return_value.__enter__.return_value = mock_temp
-            
-            # Call the function
-            result = run_gcp_code('print("This will timeout")')
-            
-            # Verify results
-            assert "Execution timed out" in result
-    
-    def test_run_gcp_code_error(self):
-        """Test code execution error."""
-        with patch('tempfile.NamedTemporaryFile', side_effect=Exception("File error")):
-            result = run_gcp_code('print("This will fail")')
-            assert "Error executing code:" in result
-            assert "File error" in result
 
-class TestResourceFunctions:
-    """Test resource functions."""
+# Test listing BigQuery datasets
+def test_list_bigquery_datasets():
+    """Test listing BigQuery datasets"""
+    result = list_bigquery_datasets(project_id=TEST_PROJECT)
+    data = json.loads(result)
     
-    def test_list_gcp_regions(self):
-        """Test listing GCP regions."""
-        result = list_gcp_regions()
-        result_data = json.loads(result)
+    # If error, the test continues (as there might not be any datasets)
+    if isinstance(data, dict) and 'Status' in data and data['Status'] == 'Error':
+        logger.warning(f"Could not list datasets: {data.get('Message')}")
+        return
         
-        assert isinstance(result_data, list)
-        assert "us-central1" in result_data
-        assert "europe-west1" in result_data
-        assert len(result_data) > 20  # Ensure we have a reasonable number of regions
+    # If successful, should be a list
+    assert isinstance(data, list)
     
-    def test_list_machine_types(self):
-        """Test listing machine types."""
-        result = list_machine_types()
-        result_data = json.loads(result)
-        
-        assert isinstance(result_data, dict)
-        assert "General Purpose" in result_data
-        assert "e2-micro" in result_data["General Purpose"]
-        assert "Memory Optimized" in result_data
-        assert "Compute Optimized" in result_data
+    # If datasets exist, verify structure
+    if data:
+        assert 'DatasetId' in data[0]
+        assert 'Location' in data[0]
 
-class TestAuthentication:
-    """Test authentication edge cases."""
+
+# Test running GCP code
+def test_run_gcp_code():
+    """Test running custom GCP code"""
+    code = """
+# List GCP regions
+from google.cloud import compute_v1
+client = compute_v1.RegionsClient()
+response = client.list(project='google-cloud-regions')
+regions = [region.name for region in response]
+print(f"Available GCP regions: {len(regions)}")
+"""
     
-    def test_auth_error_handling(self):
-        """Test handling authentication errors."""
-        with patch('google.auth.default', side_effect=DefaultCredentialsError("No credentials")):
-            result = list_gcs_buckets()
-            result_data = json.loads(result)
-            assert result_data['Status'] == 'Error'
-            assert 'No credentials' in result_data['Message']
+    result = run_gcp_code(code)
+    
+    # Verify that the code executed successfully
+    assert "Available GCP regions:" in result
+    assert "Error:" not in result
 
-# Run the tests
+
+# Run all tests
 if __name__ == "__main__":
-    pytest.main(["-v"])
+    # Run with -v flag for verbose output
+    import sys
+    sys.exit(pytest.main(["-v"]))

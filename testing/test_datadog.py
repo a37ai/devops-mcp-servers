@@ -1,5 +1,10 @@
-import pytest
+import sys
 import os
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+import pytest
+import pytest_asyncio
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -8,6 +13,10 @@ from unittest.mock import MagicMock, patch
 
 # Import the server
 from servers.datadog.datadog_mcp import DatadogMCPServer
+
+# Configure pytest-asyncio to use function scope for async fixtures
+def pytest_configure(config):
+    config.option.asyncio_default_fixture_loop_scope = "function"
 
 # Mock Context class for testing
 class MockContext:
@@ -20,7 +29,7 @@ def test_id():
     """Generate a unique test ID to avoid collisions"""
     return f"test-{str(uuid.uuid4())[:8]}"
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def server_context():
     """Create server and yield context for testing"""
     # Check for API and APP keys
@@ -47,8 +56,7 @@ async def server_context():
     
     # Get context from lifespan
     async with server._api_client_lifespan(server.mcp) as context:
-        ctx = MockContext(context)
-        yield ctx
+        yield MockContext(context)
 
 # Test Metrics API
 @pytest.mark.asyncio

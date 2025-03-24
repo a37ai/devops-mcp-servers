@@ -496,8 +496,7 @@ async def create_network(
             internal=internal,
             labels=labels
         )
-        
-        return f"Network {name} created successfully with ID: {network.short_id}"
+        return f"Network created successfully with ID: {network.short_id}"
     except Exception as e:
         logger.error(f"Error creating network: {e}")
         return f"Error creating network: {str(e)}"
@@ -571,7 +570,7 @@ async def create_volume(
             labels=labels
         )
         
-        return f"Volume {name} created successfully"
+        return f"Volume created successfully"
     except Exception as e:
         logger.error(f"Error creating volume: {e}")
         return f"Error creating volume: {str(e)}"
