@@ -14,6 +14,7 @@ Environment variables:
 import os
 import json
 from typing import Any, Dict, List, Optional, Union
+import urllib
 import httpx
 from mcp.server.fastmcp import FastMCP, Context
 from dotenv import load_dotenv
@@ -101,7 +102,7 @@ async def create_or_update_file(
     Returns:
         File content and commit details
     """
-    endpoint = f"projects/{project_id}/repository/files/{httpx.utils.quote(file_path)}"
+    endpoint = f"projects/{project_id}/repository/files/{urllib.parse.quote(file_path, safe='')}"
     
     # Check if the file exists
     try:
@@ -272,7 +273,7 @@ async def get_file_contents(
     
     # Try to get file contents first
     try:
-        endpoint = f"projects/{project_id}/repository/files/{httpx.utils.quote(file_path)}"
+        endpoint = f"projects/{project_id}/repository/files/{urllib.parse.quote(file_path, safe='')}"
         result = await make_gitlab_request(
             "GET",
             endpoint,

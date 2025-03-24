@@ -22,6 +22,7 @@ sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import os
 import json
 import pytest
+import pytest_asyncio
 import asyncio
 import uuid
 import base64
@@ -105,7 +106,7 @@ async def delete_repository(project_id: str) -> Dict[str, Any]:
 
 # Test fixtures
 
-@pytest.fixture(scope="module")
+@pytest_asyncio.fixture(scope="module")
 async def test_project():
     """Create a test project and return its ID."""
     # Generate a unique project name
@@ -120,7 +121,7 @@ async def test_project():
     )
     
     project_data = json.loads(result)
-    project_id = project_data["id"]
+    project_id = str(project_data["id"])  # Ensure it's a string
     
     # Yield the project ID for tests
     yield project_id
@@ -132,7 +133,7 @@ async def test_project():
     except Exception as e:
         print(f"Failed to clean up test project {project_name} (ID: {project_id}): {str(e)}")
 
-@pytest.fixture(scope="module")
+@pytest_asyncio.fixture(scope="module")
 async def test_branch(test_project):
     """Create a test branch and return its name."""
     # Create a branch using the MCP server function
@@ -150,11 +151,13 @@ async def test_branch(test_project):
 @pytest.mark.asyncio
 async def test_get_project_details(test_project):
     """Test getting project details."""
-    result = await gitlab_mcp.get_project_details(test_project)
+    result = await gitlab_mcp.get_project_details(
+        project_id=test_project
+    )
     result_data = json.loads(result)
     
     assert "id" in result_data
-    assert result_data["id"] == test_project
+    assert str(result_data["id"]) == test_project
     assert "name" in result_data
     assert result_data["visibility"] == "private"
 
@@ -435,7 +438,7 @@ async def test_fork_repository(test_project):
         
         assert "id" in result_data
         assert "name" in result_data
-        assert result_data["forked_from_project"]["id"] == test_project
+        assert result_data["forked_from_project"]["id"] == int(test_project)
         
         # Clean up the forked repository
         try:
