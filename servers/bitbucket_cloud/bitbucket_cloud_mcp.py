@@ -87,14 +87,12 @@ async def get_current_user(ctx: Context) -> str:
 async def get_user_profile(ctx: Context, username: str) -> str:
     """
     Fetch public profile data for a specific user account.
-    
     Args:
         username: The username or UUID of the Bitbucket user.
-    
     Returns:
         JSON data containing the user's public profile information.
     """
-    data = await make_request(ctx, "GET", f"users/{username}")
+    data = await make_request(ctx, "GET", "user")
     return format_response(data)
 
 @mcp.tool()
