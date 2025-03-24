@@ -236,20 +236,27 @@ async def list_services(namespace: Optional[str] = None) -> str:
             spec = svc.spec
             
             ports = []
-            for port in spec.ports:
-                port_str = f"{port.port}"
-                if port.target_port:
+            for port in spec.ports or []:
+                port_str = f"{getattr(port, 'port', 'N/A')}"
+                if hasattr(port, 'target_port') and port.target_port:
                     port_str += f":{port.target_port}"
-                if port.node_port:
+                if hasattr(port, 'node_port') and port.node_port:
                     port_str += f":{port.node_port}"
-                port_str += f"/{port.protocol}"
+                port_str += f"/{getattr(port, 'protocol', 'TCP')}"
                 ports.append(port_str)
                 
-            age = metadata.creation_timestamp.strftime("%Y-%m-%d %H:%M:%S")
-            external_ip = "none" if not spec.external_i_ps else ",".join(spec.external_i_ps)
+            age = metadata.creation_timestamp.strftime("%Y-%m-%d %H:%M:%S") if metadata.creation_timestamp else "N/A"
+            
+            # Fix the typo: external_i_ps -> external_ips
+            external_ips = getattr(spec, 'external_ips', None)
+            external_ip = "none" if not external_ips else ",".join(external_ips)
+            
+            name = metadata.name or "N/A"
+            svc_type = spec.type or "ClusterIP"
+            cluster_ip = spec.cluster_ip or "N/A"
             
             result.append(
-                f"{metadata.name}\t{spec.type}\t{spec.cluster_ip}\t{external_ip}\t{','.join(ports)}\t{age}"
+                f"{name}\t{svc_type}\t{cluster_ip}\t{external_ip}\t{','.join(ports)}\t{age}"
             )
         
         if not services.items:
@@ -416,48 +423,48 @@ async def describe_pod(name: str, namespace: Optional[str] = None) -> str:
         result.append(f"Namespace:    {pod_dict['metadata']['namespace']}")
         
         # Basic metadata
-        if 'labels' in pod_dict['metadata']:
+        if 'metadata' in pod_dict and 'labels' in pod_dict['metadata']:
             result.append("Labels:       " + ", ".join([f"{k}={v}" for k, v in pod_dict['metadata']['labels'].items()]))
         
-        if 'annotations' in pod_dict['metadata']:
+        if 'metadata' in pod_dict and 'annotations' in pod_dict['metadata']:
             result.append("Annotations:  " + ", ".join([f"{k}={v}" for k, v in pod_dict['metadata']['annotations'].items()]))
         
-        result.append(f"Status:       {pod_dict['status']['phase']}")
+        status = pod_dict.get('status', {})
+        result.append(f"Status:       {status.get('phase', 'Unknown')}")
         
         # IP and node information
-        result.append(f"IP:           {pod_dict['status'].get('pod_ip', 'N/A')}")
-        result.append(f"Node:         {pod_dict['spec'].get('node_name', 'N/A')}")
-        result.append(f"Start Time:   {pod_dict['metadata'].get('creation_timestamp', 'N/A')}")
+        result.append(f"IP:           {status.get('pod_ip', 'N/A')}")
+        result.append(f"Node:         {pod_dict.get('spec', {}).get('node_name', 'N/A')}")
+        result.append(f"Start Time:   {pod_dict.get('metadata', {}).get('creation_timestamp', 'N/A')}")
         
         # Containers
         result.append("\nContainers:")
-        for container in pod_dict['spec']['containers']:
-            result.append(f"  {container['name']}:")
-            result.append(f"    Image:       {container['image']}")
+        for container in pod_dict.get('spec', {}).get('containers', []):
+            result.append(f"  {container.get('name', 'unnamed')}:")
+            result.append(f"    Image:       {container.get('image', 'N/A')}")
             
-            if 'resources' in container:
-                resources = container['resources']
-                if 'requests' in resources:
-                    requests = resources['requests']
+            resources = container.get('resources', {})
+            if resources:
+                requests = resources.get('requests', {})
+                if requests:
                     result.append(f"    Requests:    CPU: {requests.get('cpu', 'N/A')}, Memory: {requests.get('memory', 'N/A')}")
                 
-                if 'limits' in resources:
-                    limits = resources['limits']
+                limits = resources.get('limits', {})
+                if limits:
                     result.append(f"    Limits:      CPU: {limits.get('cpu', 'N/A')}, Memory: {limits.get('memory', 'N/A')}")
             
-            if 'ports' in container:
-                for port in container['ports']:
-                    result.append(f"    Port:        {port.get('container_port', 'N/A')}/{port.get('protocol', 'TCP')}")
+            for port in container.get('ports', []):
+                result.append(f"    Port:        {port.get('container_port', 'N/A')}/{port.get('protocol', 'TCP')}")
         
         # Container statuses
-        if 'container_statuses' in pod_dict['status']:
+        if 'container_statuses' in status:
             result.append("\nContainer Statuses:")
-            for status in pod_dict['status']['container_statuses']:
-                result.append(f"  {status['name']}:")
-                result.append(f"    Ready:       {status['ready']}")
-                result.append(f"    Restarts:    {status['restart_count']}")
+            for status_item in status['container_statuses']:
+                result.append(f"  {status_item.get('name', 'unnamed')}:")
+                result.append(f"    Ready:       {status_item.get('ready', False)}")
+                result.append(f"    Restarts:    {status_item.get('restart_count', 0)}")
                 
-                state = status['state']
+                state = status_item.get('state', {})
                 if 'running' in state:
                     result.append(f"    State:       Running")
                     result.append(f"    Started:     {state['running'].get('started_at', 'N/A')}")
@@ -477,7 +484,8 @@ async def describe_pod(name: str, namespace: Optional[str] = None) -> str:
         
         if events.items:
             for event in events.items:
-                result.append(f"  {event.last_timestamp}: {event.reason}: {event.message}")
+                event_time = event.last_timestamp or event.event_time or event.first_timestamp or "N/A"
+                result.append(f"  {event_time}: {event.reason}: {event.message}")
         else:
             result.append("  No events found")
         
@@ -1918,26 +1926,44 @@ def _parse_cpu(cpu_str: str) -> float:
 def _parse_memory(memory_str: str) -> float:
     """Parse memory value to bytes from Kubernetes resource notation."""
     try:
+        if memory_str is None:
+            return 0
+            
         if isinstance(memory_str, (int, float)):
             return float(memory_str)
         
-        memory_str = memory_str.upper()
+        # Handle empty string
+        if not memory_str.strip():
+            return 0
+            
+        memory_str = str(memory_str).upper()
         
-        if memory_str.endswith('KI') or memory_str.endswith('K'):
-            return float(memory_str[:-2] if memory_str.endswith('KI') else memory_str[:-1]) * 1024
-        elif memory_str.endswith('MI') or memory_str.endswith('M'):
-            return float(memory_str[:-2] if memory_str.endswith('MI') else memory_str[:-1]) * 1024 * 1024
-        elif memory_str.endswith('GI') or memory_str.endswith('G'):
-            return float(memory_str[:-2] if memory_str.endswith('GI') else memory_str[:-1]) * 1024 * 1024 * 1024
-        elif memory_str.endswith('TI') or memory_str.endswith('T'):
-            return float(memory_str[:-2] if memory_str.endswith('TI') else memory_str[:-1]) * 1024 * 1024 * 1024 * 1024
-        elif memory_str.endswith('PI') or memory_str.endswith('P'):
-            return float(memory_str[:-2] if memory_str.endswith('PI') else memory_str[:-1]) * 1024 * 1024 * 1024 * 1024 * 1024
-        elif memory_str.endswith('EI') or memory_str.endswith('E'):
-            return float(memory_str[:-2] if memory_str.endswith('EI') else memory_str[:-1]) * 1024 * 1024 * 1024 * 1024 * 1024 * 1024
-        else:
-            return float(memory_str)
-    except (ValueError, TypeError, IndexError):
+        # Handle common suffixes with appropriate multipliers
+        multipliers = {
+            'K': 1024,
+            'KI': 1024,
+            'M': 1024 * 1024,
+            'MI': 1024 * 1024,
+            'G': 1024 * 1024 * 1024,
+            'GI': 1024 * 1024 * 1024,
+            'T': 1024 * 1024 * 1024 * 1024,
+            'TI': 1024 * 1024 * 1024 * 1024,
+            'P': 1024 * 1024 * 1024 * 1024 * 1024,
+            'PI': 1024 * 1024 * 1024 * 1024 * 1024,
+            'E': 1024 * 1024 * 1024 * 1024 * 1024 * 1024,
+            'EI': 1024 * 1024 * 1024 * 1024 * 1024 * 1024
+        }
+        
+        for suffix, multiplier in multipliers.items():
+            if memory_str.endswith(suffix):
+                # Extract the numeric part, handling any whitespace
+                numeric_part = memory_str[:-len(suffix)].strip()
+                return float(numeric_part) * multiplier
+        
+        # If no suffix found, try converting directly
+        return float(memory_str)
+    except (ValueError, TypeError, IndexError, AttributeError) as e:
+        logger.debug(f"Error parsing memory value '{memory_str}': {e}")
         return 0
 
 def _format_memory(memory_bytes: float) -> str:
