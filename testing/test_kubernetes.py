@@ -6,6 +6,10 @@ This script tests the functionality of the Kubernetes MCP server by executing
 various MCP tool functions. It creates resources in an isolated test namespace
 and cleans up everything after the tests are completed.
 """
+import sys
+import os
+# Add the parent directory to the Python path
+sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import asyncio
 import logging
