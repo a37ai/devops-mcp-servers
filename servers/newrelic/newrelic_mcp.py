@@ -4,9 +4,330 @@ import os
 import httpx
 import json
 from datetime import datetime, timedelta
+from typing import List, Dict, Optional, Any, Union
 from mcp.server.fastmcp import FastMCP, Context
 from dotenv import load_dotenv
+
 load_dotenv()
+from pydantic import BaseModel, Field, ValidationError
+
+
+# Base Models
+class ErrorResponse(BaseModel):
+    """Model for error responses"""
+    error: str
+    message: Optional[str] = None
+
+
+# Application Models
+class ApplicationSummary(BaseModel):
+    """Summary metrics for an application"""
+    throughput: Optional[float] = None
+    response_time: Optional[float] = None
+    error_rate: Optional[float] = None
+    apdex_score: Optional[float] = None
+
+
+class Application(BaseModel):
+    """Model for application data"""
+    id: int
+    name: str
+    language: Optional[str] = None
+    health_status: Optional[str] = None
+    application_summary: Optional[ApplicationSummary] = None
+    settings: Optional[Dict[str, Any]] = None
+
+
+class ApplicationList(BaseModel):
+    """Response model for application listing"""
+    applications: List[Application]
+
+
+class ApplicationRequest(BaseModel):
+    """Model for application update/create requests"""
+    name: str
+    settings: Optional[Dict[str, Any]] = None
+
+
+# Alert Models
+class AlertPolicy(BaseModel):
+    """Model for alert policy data"""
+    id: int
+    incident_preference: str
+    name: str
+    created_at: Optional[int] = None
+    updated_at: Optional[int] = None
+
+
+class AlertPolicyList(BaseModel):
+    """Response model for alert policy listing"""
+    policies: List[AlertPolicy]
+
+
+class AlertPolicyRequest(BaseModel):
+    """Model for creating/updating alert policies"""
+    policy: Dict[str, Any]
+
+
+class AlertCondition(BaseModel):
+    """Model for alert condition data"""
+    id: int
+    type: str
+    name: str
+    enabled: bool
+    entities: List[int]
+    metric: Optional[str] = None
+    terms: Optional[List[Dict[str, Any]]] = None
+    violation_close_timer: Optional[int] = None
+    user_defined: Optional[Dict[str, Any]] = None
+
+
+class AlertConditionList(BaseModel):
+    """Response model for alert condition listing"""
+    conditions: List[AlertCondition]
+
+
+class AlertConditionRequest(BaseModel):
+    """Model for creating/updating alert conditions"""
+    condition: Dict[str, Any]
+
+
+class NrqlAlertCondition(BaseModel):
+    """Model for NRQL alert condition data"""
+    id: int
+    name: str
+    enabled: bool
+    value_function: Optional[str] = None
+    terms: List[Dict[str, Any]]
+    nrql: Dict[str, Any]
+
+
+class NrqlAlertConditionList(BaseModel):
+    """Response model for NRQL alert condition listing"""
+    nrql_conditions: List[NrqlAlertCondition]
+
+
+class NrqlAlertConditionRequest(BaseModel):
+    """Model for creating/updating NRQL alert conditions"""
+    nrql_condition: Dict[str, Any]
+
+
+# Synthetic Monitoring Models
+class Monitor(BaseModel):
+    """Model for synthetic monitor data"""
+    id: str
+    name: str
+    type: str
+    frequency: int
+    uri: Optional[str] = None
+    status: str
+    locations: List[str]
+    slaThreshold: Optional[float] = None
+
+
+class MonitorList(BaseModel):
+    """Response model for monitor listing"""
+    monitors: List[Monitor]
+
+
+class MonitorRequest(BaseModel):
+    """Model for creating/updating monitors"""
+    name: str
+    type: str
+    frequency: int
+    uri: Optional[str] = None
+    locations: List[str]
+    status: str = "ENABLED"
+    slaThreshold: Optional[float] = None
+
+
+class MonitorUpdate(BaseModel):
+    """Model for updating monitor data"""
+    name: Optional[str] = None
+    frequency: Optional[int] = None
+    status: Optional[str] = None
+    slaThreshold: Optional[float] = None
+    locations: Optional[List[str]] = None
+
+
+# Infrastructure Models
+class InfrastructureHost(BaseModel):
+    """Model for infrastructure host data"""
+    id: str
+    name: str
+    type: Optional[str] = None
+    os: Optional[str] = None
+    cpuCores: Optional[int] = None
+    cpuMhz: Optional[float] = None
+    memoryGB: Optional[float] = None
+    lastReportedAt: Optional[int] = None
+
+
+class InfrastructureHostList(BaseModel):
+    """Response model for infrastructure host listing"""
+    hosts: List[InfrastructureHost]
+
+
+# Workload Models
+class Workload(BaseModel):
+    """Model for workload data"""
+    guid: str
+    name: str
+    entitySearchQuery: str
+    entityCount: Optional[int] = None
+    entityGuids: Optional[List[str]] = None
+
+
+class WorkloadRequest(BaseModel):
+    """Model for creating/updating workloads"""
+    name: str
+    entitySearchQuery: str
+    entityGuids: Optional[List[str]] = None
+
+
+# Dashboard Models
+class Dashboard(BaseModel):
+    """Model for dashboard data"""
+    id: str
+    title: str
+    permissions: str
+    created_at: Optional[str] = None
+    updated_at: Optional[str] = None
+
+
+class DashboardList(BaseModel):
+    """Response model for dashboard listing"""
+    dashboards: List[Dashboard]
+
+
+# Browser Application Models
+class BrowserApplication(BaseModel):
+    """Model for browser application data"""
+    id: int
+    name: str
+    browser_monitoring_key: Optional[str] = None
+    js_agent_version: Optional[str] = None
+    loader_type: Optional[str] = None
+
+
+class BrowserApplicationList(BaseModel):
+    """Response model for browser application listing"""
+    browser_applications: List[BrowserApplication]
+
+
+class BrowserApplicationRequest(BaseModel):
+    """Model for creating/updating browser applications"""
+    name: str
+
+
+# Mobile Application Models
+class MobileApplication(BaseModel):
+    """Model for mobile application data"""
+    id: int
+    name: str
+    platform: Optional[str] = None
+    version: Optional[str] = None
+
+
+class MobileApplicationList(BaseModel):
+    """Response model for mobile application listing"""
+    applications: List[MobileApplication]
+
+
+# Deployment Models
+class Deployment(BaseModel):
+    """Model for deployment data"""
+    id: int
+    revision: str
+    changelog: Optional[str] = None
+    description: Optional[str] = None
+    user: Optional[str] = None
+    timestamp: Optional[str] = None
+
+
+class DeploymentList(BaseModel):
+    """Response model for deployment listing"""
+    deployments: List[Deployment]
+
+
+class DeploymentRequest(BaseModel):
+    """Model for creating deployments"""
+    revision: str
+    changelog: Optional[str] = None
+    description: Optional[str] = None
+    user: Optional[str] = None
+
+
+# Key Transaction Models
+class KeyTransaction(BaseModel):
+    """Model for key transaction data"""
+    id: int
+    name: str
+    application_id: int
+    transaction_name: str
+    health_status: Optional[str] = None
+    response_time: Optional[float] = None
+    apdex_score: Optional[float] = None
+    throughput: Optional[float] = None
+
+
+class KeyTransactionList(BaseModel):
+    """Response model for key transaction listing"""
+    key_transactions: List[KeyTransaction]
+
+
+# Service Level Models
+class ServiceLevelIndicator(BaseModel):
+    """Model for service level indicator data"""
+    guid: str
+    name: str
+    description: Optional[str] = None
+    entityGuid: str
+    entityCount: Optional[int] = None
+
+
+class ServiceLevelIndicatorList(BaseModel):
+    """Response model for service level indicator listing"""
+    indicators: List[ServiceLevelIndicator]
+
+
+# Error Tracking Models
+class ErrorAttribute(BaseModel):
+    """Model for error attribute data"""
+    key: str
+    value: Any
+
+
+class ErrorLocation(BaseModel):
+    """Model for error location data"""
+    file: Optional[str] = None
+    lineNumber: Optional[int] = None
+    columnNumber: Optional[int] = None
+
+
+class ErrorStackTrace(BaseModel):
+    """Model for error stack trace data"""
+    formatted: Optional[str] = None
+    rawTrace: Optional[str] = None
+
+
+class Error(BaseModel):
+    """Model for error data"""
+    id: str
+    message: str
+    entityGuid: Optional[str] = None
+    occurrences: Optional[int] = None
+    occurrenceLocation: Optional[ErrorLocation] = None
+    attributes: Optional[List[ErrorAttribute]] = None
+    stackTrace: Optional[ErrorStackTrace] = None
+    firstSeen: Optional[str] = None
+    lastSeen: Optional[str] = None
+
+
+class ErrorList(BaseModel):
+    """Response model for error listing"""
+    results: List[Error]
+
 
 # Initialize FastMCP server
 mcp = FastMCP("newrelic-api")
@@ -32,20 +353,27 @@ async def make_request(
     """Make a request to the New Relic API."""
     url = f"{BASE_URL}{endpoint}"
     
-    async with httpx.AsyncClient() as client:
-        if method.lower() == "get":
-            response = await client.get(url, headers=HEADERS, params=params)
-        elif method.lower() == "post":
-            response = await client.post(url, headers=HEADERS, params=params, json=data)
-        elif method.lower() == "put":
-            response = await client.put(url, headers=HEADERS, params=params, json=data)
-        elif method.lower() == "delete":
-            response = await client.delete(url, headers=HEADERS, params=params)
-        else:
-            raise ValueError(f"Unsupported method: {method}")
-        
-        response.raise_for_status()
-        return response.json()
+    try:
+        async with httpx.AsyncClient() as client:
+            if method.lower() == "get":
+                response = await client.get(url, headers=HEADERS, params=params)
+            elif method.lower() == "post":
+                response = await client.post(url, headers=HEADERS, params=params, json=data)
+            elif method.lower() == "put":
+                response = await client.put(url, headers=HEADERS, params=params, json=data)
+            elif method.lower() == "delete":
+                response = await client.delete(url, headers=HEADERS, params=params)
+            else:
+                raise ValueError(f"Unsupported method: {method}")
+            
+            response.raise_for_status()
+            return response.json()
+    except httpx.HTTPError as e:
+        return {"error": f"HTTP Error: {str(e)}"}
+    except ValidationError as e:
+        return {"error": f"Validation Error: {str(e)}"}
+    except Exception as e:
+        return {"error": f"Error: {str(e)}"}
 
 # Applications Tools
 @mcp.tool()
@@ -75,7 +403,14 @@ async def list_applications(
         params["page"] = page
     
     response = await make_request("get", "/applications.json", params)
-    return json.dumps(response, indent=2)
+    
+    try:
+        # Validate response data with Pydantic model
+        app_list = ApplicationList(**response)
+        return json.dumps(app_list.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def get_application(app_id: int) -> str:
@@ -86,7 +421,17 @@ async def get_application(app_id: int) -> str:
         app_id: Application ID
     """
     response = await make_request("get", f"/applications/{app_id}.json")
-    return json.dumps(response, indent=2)
+    
+    try:
+        # Validate response data with Pydantic model
+        if "application" in response:
+            app = Application(**response["application"])
+            return json.dumps(app.dict(), indent=2)
+        else:
+            return json.dumps(response, indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def update_application(
@@ -106,22 +451,38 @@ async def update_application(
         end_user_apdex_threshold: New end user Apdex threshold
         enable_real_user_monitoring: Enable or disable real user monitoring
     """
-    settings = {}
-    if app_apdex_threshold is not None:
-        settings["app_apdex_threshold"] = app_apdex_threshold
-    if end_user_apdex_threshold is not None:
-        settings["end_user_apdex_threshold"] = end_user_apdex_threshold
-    if enable_real_user_monitoring is not None:
-        settings["enable_real_user_monitoring"] = enable_real_user_monitoring
-    
-    data = {"application": {}}
-    if name:
-        data["application"]["name"] = name
-    if settings:
-        data["application"]["settings"] = settings
-    
-    response = await make_request("put", f"/applications/{app_id}.json", data=data)
-    return json.dumps(response, indent=2)
+    try:
+        settings = {}
+        if app_apdex_threshold is not None:
+            settings["app_apdex_threshold"] = app_apdex_threshold
+        if end_user_apdex_threshold is not None:
+            settings["end_user_apdex_threshold"] = end_user_apdex_threshold
+        if enable_real_user_monitoring is not None:
+            settings["enable_real_user_monitoring"] = enable_real_user_monitoring
+        
+        # Validate request data with Pydantic model
+        request_data = ApplicationRequest(
+            name=name or "",
+            settings=settings
+        )
+        
+        data = {"application": {}}
+        if name:
+            data["application"]["name"] = name
+        if settings:
+            data["application"]["settings"] = settings
+        
+        response = await make_request("put", f"/applications/{app_id}.json", data=data)
+        
+        # Validate response
+        if "application" in response:
+            app = Application(**response["application"])
+            return json.dumps(app.dict(), indent=2)
+        else:
+            return json.dumps(response, indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def delete_application(app_id: int) -> str:
@@ -131,8 +492,12 @@ async def delete_application(app_id: int) -> str:
     Args:
         app_id: Application ID
     """
-    response = await make_request("delete", f"/applications/{app_id}.json")
-    return json.dumps(response, indent=2)
+    try:
+        response = await make_request("delete", f"/applications/{app_id}.json")
+        return json.dumps(response, indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def get_application_metrics(app_id: int, name_filter: Optional[str] = None, page: Optional[int] = None) -> str:
@@ -398,7 +763,14 @@ async def list_alert_policies(
         params["page"] = page
     
     response = await make_request("get", "/alerts_policies.json", params)
-    return json.dumps(response, indent=2)
+    
+    try:
+        # Validate response data with Pydantic model
+        policy_list = AlertPolicyList(**response)
+        return json.dumps(policy_list.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def create_alert_policy(name: str, incident_preference: str) -> str:
@@ -409,15 +781,33 @@ async def create_alert_policy(name: str, incident_preference: str) -> str:
         name: Policy name
         incident_preference: Incident rollup preference (PER_POLICY, PER_CONDITION, or PER_CONDITION_AND_TARGET)
     """
-    data = {
-        "policy": {
-            "name": name,
-            "incident_preference": incident_preference
+    try:
+        # Validate request data with Pydantic model
+        policy_request = AlertPolicyRequest(
+            policy={
+                "name": name,
+                "incident_preference": incident_preference
+            }
+        )
+        
+        data = {
+            "policy": {
+                "name": name,
+                "incident_preference": incident_preference
+            }
         }
-    }
-    
-    response = await make_request("post", "/alerts_policies.json", data=data)
-    return json.dumps(response, indent=2)
+        
+        response = await make_request("post", "/alerts_policies.json", data=data)
+        
+        # Validate response
+        if "policy" in response:
+            policy = AlertPolicy(**response["policy"])
+            return json.dumps(policy.dict(), indent=2)
+        else:
+            return json.dumps(response, indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def update_alert_policy(
@@ -433,14 +823,33 @@ async def update_alert_policy(
         name: New policy name
         incident_preference: New incident rollup preference
     """
-    data = {"policy": {}}
-    if name:
-        data["policy"]["name"] = name
-    if incident_preference:
-        data["policy"]["incident_preference"] = incident_preference
-    
-    response = await make_request("put", f"/alerts_policies/{policy_id}.json", data=data)
-    return json.dumps(response, indent=2)
+    try:
+        policy_data = {}
+        if name:
+            policy_data["name"] = name
+        if incident_preference:
+            policy_data["incident_preference"] = incident_preference
+        
+        # Validate request data with Pydantic model
+        policy_request = AlertPolicyRequest(policy=policy_data)
+        
+        data = {"policy": {}}
+        if name:
+            data["policy"]["name"] = name
+        if incident_preference:
+            data["policy"]["incident_preference"] = incident_preference
+        
+        response = await make_request("put", f"/alerts_policies/{policy_id}.json", data=data)
+        
+        # Validate response
+        if "policy" in response:
+            policy = AlertPolicy(**response["policy"])
+            return json.dumps(policy.dict(), indent=2)
+        else:
+            return json.dumps(response, indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def delete_alert_policy(policy_id: int) -> str:
@@ -450,8 +859,12 @@ async def delete_alert_policy(policy_id: int) -> str:
     Args:
         policy_id: Policy ID
     """
-    response = await make_request("delete", f"/alerts_policies/{policy_id}.json")
-    return json.dumps(response, indent=2)
+    try:
+        response = await make_request("delete", f"/alerts_policies/{policy_id}.json")
+        return json.dumps(response, indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 # Alerts Conditions Tools
 @mcp.tool()
@@ -1267,10 +1680,21 @@ async def list_monitors(
     if offset:
         params["offset"] = offset
     
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{synthetics_url}/v3/monitors", headers=headers, params=params)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=2)
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{synthetics_url}/v3/monitors", headers=headers, params=params)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Validate response with Pydantic model
+            monitor_list = MonitorList(monitors=result["monitors"])
+            return json.dumps(monitor_list.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def get_monitor(monitor_id: str) -> str:
@@ -1289,10 +1713,21 @@ async def get_monitor(monitor_id: str) -> str:
         "Content-Type": "application/json"
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=2)
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Validate response with Pydantic model
+            monitor = Monitor(**result["monitor"])
+            return json.dumps(monitor.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def create_simple_monitor(
@@ -1325,22 +1760,34 @@ async def create_simple_monitor(
         "Content-Type": "application/json"
     }
     
-    data = {
-        "name": name,
-        "type": type,
-        "frequency": frequency,
-        "uri": uri,
-        "locations": locations,
-        "status": status
-    }
-    
-    if sla_threshold is not None:
-        data["slaThreshold"] = sla_threshold
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.post(f"{synthetics_url}/v3/monitors", headers=headers, json=data)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=2)
+    try:
+        # Validate request data with Pydantic model
+        monitor_request = MonitorRequest(
+            name=name,
+            type=type,
+            frequency=frequency,
+            uri=uri,
+            locations=locations,
+            status=status,
+            slaThreshold=sla_threshold
+        )
+        
+        data = monitor_request.dict(exclude_none=True)
+        
+        async with httpx.AsyncClient() as client:
+            response = await client.post(f"{synthetics_url}/v3/monitors", headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Validate response with Pydantic model
+            monitor = Monitor(**result["monitor"])
+            return json.dumps(monitor.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def update_monitor(
@@ -1371,37 +1818,46 @@ async def update_monitor(
         "Content-Type": "application/json"
     }
     
-    # Get current monitor details first
-    async with httpx.AsyncClient() as client:
-        get_response = await client.get(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers)
-        get_response.raise_for_status()
-        current_monitor = get_response.json()
-    
-    # Update only the provided fields
-    data = {}
-    if name:
-        data["name"] = name
-    if frequency:
-        data["frequency"] = frequency
-    if status:
-        data["status"] = status
-    if sla_threshold is not None:
-        data["slaThreshold"] = sla_threshold
-    if locations:
-        data["locations"] = locations
-    
-    # If type is SCRIPT_API or SCRIPT_BROWSER, we need to include script property
-    if current_monitor.get("type") in ["SCRIPT_API", "SCRIPT_BROWSER"]:
-        data["script"] = current_monitor.get("script", "")
-    
-    # For browser and simple monitors, include URI
-    if current_monitor.get("type") in ["SIMPLE", "BROWSER"]:
-        data["uri"] = current_monitor.get("uri", "")
-    
-    async with httpx.AsyncClient() as client:
-        response = await client.put(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers, json=data)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=2)
+    try:
+        # Get current monitor details first
+        async with httpx.AsyncClient() as client:
+            get_response = await client.get(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers)
+            get_response.raise_for_status()
+            current_monitor = get_response.json()
+            
+            # Validate the update data with Pydantic model
+            monitor_update = MonitorUpdate(
+                name=name,
+                frequency=frequency,
+                status=status,
+                slaThreshold=sla_threshold,
+                locations=locations
+            )
+            
+            # Update only the provided fields
+            data = monitor_update.dict(exclude_none=True)
+            
+            # If type is SCRIPT_API or SCRIPT_BROWSER, we need to include script property
+            if current_monitor.get("monitor", {}).get("type") in ["SCRIPT_API", "SCRIPT_BROWSER"]:
+                data["script"] = current_monitor.get("monitor", {}).get("script", "")
+            
+            # For browser and simple monitors, include URI
+            if current_monitor.get("monitor", {}).get("type") in ["SIMPLE", "BROWSER"]:
+                data["uri"] = current_monitor.get("monitor", {}).get("uri", "")
+            
+            response = await client.put(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers, json=data)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Validate response with Pydantic model
+            monitor = Monitor(**result["monitor"])
+            return json.dumps(monitor.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def delete_monitor(monitor_id: str) -> str:
@@ -1420,10 +1876,17 @@ async def delete_monitor(monitor_id: str) -> str:
         "Content-Type": "application/json"
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.delete(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers)
-        response.raise_for_status()
-        return "Monitor deleted successfully"
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(f"{synthetics_url}/v3/monitors/{monitor_id}", headers=headers)
+            response.raise_for_status()
+            return json.dumps({"success": True, "message": "Monitor deleted successfully"}, indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
     
 # Workloads Tools (using NerdGraph API)
 @mcp.tool()
@@ -2205,10 +2668,21 @@ async def list_infrastructure_hosts(
     if page:
         params["page"] = page
     
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{infra_url}/hosts", headers=headers, params=params)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=2)
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{infra_url}/hosts", headers=headers, params=params)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Validate response with Pydantic model
+            host_list = InfrastructureHostList(hosts=result["hosts"])
+            return json.dumps(host_list.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def get_infrastructure_host(host_id: str) -> str:
@@ -2227,10 +2701,21 @@ async def get_infrastructure_host(host_id: str) -> str:
         "Content-Type": "application/json"
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{infra_url}/hosts/{host_id}", headers=headers)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=2)
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{infra_url}/hosts/{host_id}", headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Validate response with Pydantic model
+            host = InfrastructureHost(**result["host"])
+            return json.dumps(host.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 @mcp.tool()
 async def list_infrastructure_alerts() -> str:
@@ -2246,10 +2731,22 @@ async def list_infrastructure_alerts() -> str:
         "Content-Type": "application/json"
     }
     
-    async with httpx.AsyncClient() as client:
-        response = await client.get(f"{infra_url}/alerts/conditions", headers=headers)
-        response.raise_for_status()
-        return json.dumps(response.json(), indent=2)
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.get(f"{infra_url}/alerts/conditions", headers=headers)
+            response.raise_for_status()
+            result = response.json()
+            
+            # Validate response with Pydantic model
+            # Using AlertConditionList since infrastructure alerts are similar to regular alert conditions
+            alert_list = AlertConditionList(conditions=result["data"])
+            return json.dumps(alert_list.dict(), indent=2)
+    except ValidationError as e:
+        error_resp = ErrorResponse(error="Validation error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
+    except httpx.HTTPError as e:
+        error_resp = ErrorResponse(error="HTTP error", message=str(e))
+        return json.dumps(error_resp.dict(), indent=2)
 
 # Logs API Tools
 @mcp.tool()
