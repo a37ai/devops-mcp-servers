@@ -8,10 +8,193 @@ allowing an LLM to interact with CircleCI projects, pipelines, workflows, and jo
 import os
 import json
 import httpx
-from typing import Optional, Dict, List, Any, Union
+from typing import Optional, Dict, List, Any, Union, TypeVar, Generic
 from pydantic import BaseModel, Field
 from mcp.server.fastmcp import FastMCP, Context
 from dotenv import load_dotenv
+
+# Pydantic Models
+T = TypeVar('T')
+
+# Base Models
+class PaginatedResponse(BaseModel, Generic[T]):
+    """Base model for paginated responses from the CircleCI API."""
+    items: List[T]
+    next_page_token: Optional[str] = Field(default=None, description="Token for the next page of results")
+ 
+class MessageResponse(BaseModel):
+    """Model for simple message responses."""
+    message: str
+
+# Context Models
+class Owner(BaseModel):
+    """Owner information for contexts."""
+    id: str
+    type: str = Field(description="Type of owner, e.g. 'organization'")
+
+class ContextCreate(BaseModel):
+    """Input model for creating a context."""
+    name: str = Field(description="The user-defined name of the context")
+    owner: Owner
+
+class Context(BaseModel):
+    """Model representing a CircleCI context."""
+    id: str
+    name: str
+    created_at: str
+    owner: Owner
+
+class ContextsResponse(PaginatedResponse[Context]):
+    """Response model for listing contexts."""
+    pass
+
+class EnvironmentVariable(BaseModel):
+    """Model representing an environment variable."""
+    variable: str = Field(description="Name of the environment variable")
+    context_id: str
+    created_at: str
+
+class EnvironmentVariableCreate(BaseModel):
+    """Input model for creating/updating an environment variable."""
+    value: str = Field(description="The value of the environment variable")
+
+class EnvironmentVariablesResponse(PaginatedResponse[EnvironmentVariable]):
+    """Response model for listing environment variables."""
+    pass
+
+class ContextRestrictionCreate(BaseModel):
+    """Input model for creating a context restriction."""
+    restriction_type: str = Field(description="Type of restriction")
+    restriction_value: str = Field(description="Value for the restriction")
+
+class ContextRestriction(BaseModel):
+    """Model representing a context restriction."""
+    id: str
+    restriction_type: str
+    restriction_value: str
+    context_id: str
+    created_at: str
+
+class ContextRestrictionsResponse(BaseModel):
+    """Response model for listing context restrictions."""
+    restrictions: List[ContextRestriction]
+
+# Pipeline Models
+class PipelineContinue(BaseModel):
+    """Input model for continuing a pipeline."""
+    continuation_key: str = Field(description="A pipeline continuation key")
+    configuration: str = Field(description="A configuration string for the pipeline")
+    parameters: Optional[Dict[str, Any]] = Field(default=None, description="Pipeline parameters and their values")
+
+class PipelineTrigger(BaseModel):
+    """Input model for triggering a pipeline."""
+    branch: Optional[str] = Field(default=None, description="The branch where the pipeline will run")
+    tag: Optional[str] = Field(default=None, description="The tag used by the pipeline")
+    parameters: Optional[Dict[str, Any]] = Field(default=None, description="Pipeline parameters and their values")
+
+class Pipeline(BaseModel):
+    """Model representing a CircleCI pipeline."""
+    id: str
+    project_slug: str
+    updated_at: str
+    created_at: str
+    number: int
+    state: str
+    trigger: Dict[str, Any]
+    vcs: Optional[Dict[str, Any]] = None
+    errors: Optional[List[Dict[str, Any]]] = None
+
+class PipelinesResponse(PaginatedResponse[Pipeline]):
+    """Response model for listing pipelines."""
+    pass
+
+class PipelineConfig(BaseModel):
+    """Model representing a pipeline's configuration."""
+    source: str
+    compiled: str
+    setup_config: Optional[str] = None
+    compiled_setup_config: Optional[str] = None
+
+class PipelineValues(BaseModel):
+    """Model representing pipeline values."""
+    pipeline_parameters: Optional[Dict[str, Any]] = None
+    pipeline_values: Dict[str, Any]
+
+class NewPipelineTrigger(BaseModel):
+    """Input model for triggering a new pipeline."""
+    provider: str = Field(description="The provider segment (e.g., 'gh', 'bitbucket')")
+    organization: str = Field(description="The organization segment")
+    project: str = Field(description="The project segment")
+    definition_id: Optional[str] = None
+    config: Optional[Dict[str, Any]] = None
+    checkout: Optional[Dict[str, Any]] = None
+    parameters: Optional[Dict[str, Any]] = None
+
+# Job Models
+class Job(BaseModel):
+    """Model representing a CircleCI job."""
+    id: str
+    name: str
+    project_slug: str
+    type: str
+    status: str
+    started_at: Optional[str] = None
+    stopped_at: Optional[str] = None
+    duration: Optional[int] = None
+    build_number: int
+    executor: Dict[str, Any]
+    parallelism: int
+    contexts: List[str]
+
+class Artifact(BaseModel):
+    """Model representing a job artifact."""
+    path: str
+    node_index: int
+    url: str
+
+class ArtifactsResponse(BaseModel):
+    """Response model for listing job artifacts."""
+    items: List[Artifact]
+
+class TestMetadata(BaseModel):
+    """Model representing test metadata."""
+    name: str
+    classname: str
+    file: Optional[str] = None
+    result: str
+    run_time: float
+    message: Optional[str] = None
+    source: str
+
+class TestsResponse(BaseModel):
+    """Response model for test metadata."""
+    items: List[TestMetadata]
+
+# Workflow Models
+class Workflow(BaseModel):
+    """Model representing a CircleCI workflow."""
+    id: str
+    name: str
+    status: str
+    started_at: Optional[str] = None
+    stopped_at: Optional[str] = None
+    duration: Optional[int] = None
+    project_slug: str
+    pipeline_id: str
+    pipeline_number: int
+    created_at: str
+
+class WorkflowRerun(BaseModel):
+    """Input model for rerunning a workflow."""
+    enable_ssh: Optional[bool] = Field(default=None, description="Whether to enable SSH access")
+    from_failed: Optional[bool] = Field(default=None, description="Whether to rerun from the failed job")
+    jobs: Optional[List[str]] = Field(default=None, description="A list of job IDs to rerun")
+    sparse_tree: Optional[bool] = Field(default=None, description="Completes rerun using sparse trees logic")
+
+class WorkflowJobsResponse(PaginatedResponse[Job]):
+    """Response model for listing workflow jobs."""
+    pass
+
 load_dotenv()
 # Initialize the MCP server
 mcp = FastMCP("CircleCI")
