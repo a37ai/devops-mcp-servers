@@ -1,11 +1,257 @@
 from mcp.server.fastmcp import FastMCP
 import httpx
 import os
-from typing import Optional, Dict, List, Any, Union
 import json
 import logging
 from dotenv import load_dotenv
 load_dotenv()
+
+from typing import Optional, Dict, List, Any, Union, Literal, ClassVar
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict, ValidationError
+
+# Base models
+class BaseElasticsearchModel(BaseModel):
+    """Base model for all Elasticsearch models."""
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)  # Prevent extra fields, allow aliases
+    
+class EmptyParams(BaseElasticsearchModel):
+    """Empty parameter model for endpoints that don't require parameters."""
+    pass
+
+# Common parameter models
+class RefreshParam(BaseModel):
+    """Refresh policy parameter."""
+    refresh: Optional[Literal["true", "false", "wait_for"]] = Field(
+        None, 
+        description="Refresh policy ('true', 'false', 'wait_for')"
+    )
+    
+    # Constants for convenience
+    TRUE: ClassVar[str] = "true"
+    FALSE: ClassVar[str] = "false"
+    WAIT_FOR: ClassVar[str] = "wait_for"
+
+# Response models
+class AcknowledgedResponse(BaseElasticsearchModel):
+    """Common response for operations that return acknowledgement."""
+    acknowledged: bool = Field(description="Whether the operation was acknowledged")
+
+class ErrorResponse(BaseElasticsearchModel):
+    """Error response model."""
+    error: Dict[str, Any] = Field(description="Error details")
+    status: int = Field(description="HTTP status code")
+
+# Cluster API models
+class ClusterHealthParams(BaseElasticsearchModel):
+    """Parameters for cluster health API."""
+    index: Optional[str] = Field(None, description="Optional specific index to check health for")
+    timeout: Optional[str] = Field(None, description="Timeout for the health check (e.g., '30s')")
+    level: Optional[Literal["cluster", "indices", "shards"]] = Field(
+        None, 
+        description="Level of health information to report"
+    )
+
+class ClusterHealthResponse(BaseElasticsearchModel):
+    """Cluster health response model."""
+    cluster_name: str
+    status: Literal["green", "yellow", "red"]
+    timed_out: bool
+    number_of_nodes: int
+    number_of_data_nodes: int
+    active_primary_shards: int
+    active_shards: int
+    relocating_shards: int
+    initializing_shards: int
+    unassigned_shards: int
+    delayed_unassigned_shards: int
+    number_of_pending_tasks: int
+    number_of_in_flight_fetch: int
+    task_max_waiting_in_queue_millis: int
+    active_shards_percent_as_number: float
+
+class ClusterStatsParams(BaseElasticsearchModel):
+    """Parameters for cluster stats API."""
+    node_id: Optional[str] = Field(None, description="Optional specific node ID to get stats for")
+
+class ClusterSettingsParams(BaseElasticsearchModel):
+    """Parameters for cluster settings API."""
+    action: Literal["get", "update"] = Field(description="Action to perform: 'get' or 'update'")
+    settings: Optional[Dict[str, Any]] = Field(None, description="Settings to update (required for update action)")
+    include_defaults: bool = Field(False, description="Whether to include default settings in the response")
+
+# Search API models
+class SearchParams(BaseElasticsearchModel):
+    """Parameters for search API."""
+    index_name: str = Field(description="Name of the index to search in (or comma-separated list of indices)")
+    query: Dict[str, Any] = Field(description="Elasticsearch query DSL object")
+    from_offset: Optional[int] = Field(None, description="Starting offset for results")
+    size: Optional[int] = Field(None, description="Number of hits to return")
+    sort: Optional[List[Union[str, Dict[str, Any]]]] = Field(None, description="Sort criteria")
+    aggs: Optional[Dict[str, Any]] = Field(None, description="Aggregations to perform")
+    source: Optional[Union[bool, List[str]]] = Field(None, description="Control which fields to include in the response")
+
+class SearchHit(BaseElasticsearchModel):
+    """Single search hit model."""
+    index: str = Field(alias="_index")
+    id: str = Field(alias="_id")
+    score: Optional[float] = Field(None, alias="_score")
+    source: Dict[str, Any] = Field(alias="_source")
+
+class SearchResponse(BaseElasticsearchModel):
+    """Search response model."""
+    took: int = Field(description="Time in milliseconds for Elasticsearch to execute the search")
+    timed_out: bool = Field(description="Whether the search timed out")
+    shards: Dict[str, Any] = Field(description="Shard information", alias="_shards")
+    hits: Dict[str, Any] = Field(description="Search hits")
+
+    @field_validator("hits")
+    def validate_hits(cls, v):
+        if "total" not in v:
+            raise ValueError("hits must contain total field")
+        if "hits" not in v:
+            raise ValueError("hits must contain hits array")
+        return v
+
+# Index API models
+class CreateIndexParams(BaseElasticsearchModel):
+    """Parameters for creating an index."""
+    index_name: str = Field(description="Name of the index to create")
+    settings: Optional[Dict[str, Any]] = Field(None, description="Optional index settings")
+    mappings: Optional[Dict[str, Any]] = Field(None, description="Optional index mappings")
+    aliases: Optional[Dict[str, Any]] = Field(None, description="Optional index aliases")
+
+class GetIndexParams(BaseElasticsearchModel):
+    """Parameters for getting index information."""
+    index_name: str = Field(description="Name of the index to get information for")
+
+class DeleteIndexParams(BaseElasticsearchModel):
+    """Parameters for deleting an index."""
+    index_name: str = Field(description="Name of the index to delete")
+
+class GetMappingParams(BaseElasticsearchModel):
+    """Parameters for getting index mapping."""
+    index_name: str = Field(description="Name of the index to get mapping for")
+
+class UpdateMappingParams(BaseElasticsearchModel):
+    """Parameters for updating index mapping."""
+    index_name: str = Field(description="Name of the index to update mapping for")
+    properties: Dict[str, Any] = Field(description="Mapping properties to update")
+
+class ListIndicesParams(BaseElasticsearchModel):
+    """Parameters for listing indices."""
+    pattern: Optional[str] = Field(None, description="Optional pattern to filter indices (e.g., 'log-*')")
+
+# Document API models
+class IndexDocumentParams(BaseElasticsearchModel, RefreshParam):
+    """Parameters for indexing a document."""
+    index_name: str = Field(description="Name of the index")
+    document: Dict[str, Any] = Field(description="Document data")
+    id: Optional[str] = Field(None, description="Optional document ID (if not provided, one will be generated)")
+
+class GetDocumentParams(BaseElasticsearchModel):
+    """Parameters for getting a document."""
+    index_name: str = Field(description="Name of the index")
+    id: str = Field(description="Document ID")
+    source_includes: Optional[str] = Field(None, description="Comma-separated list of fields to include in the source")
+    source_excludes: Optional[str] = Field(None, description="Comma-separated list of fields to exclude from the source")
+
+class DeleteDocumentParams(BaseElasticsearchModel, RefreshParam):
+    """Parameters for deleting a document."""
+    index_name: str = Field(description="Name of the index")
+    id: str = Field(description="Document ID")
+
+class BulkOperationParams(BaseElasticsearchModel, RefreshParam):
+    """Parameters for bulk operations."""
+    operations: str = Field(description="Bulk operations in NDJSON format (each action and source doc on a new line)")
+    index_name: Optional[str] = Field(None, description="Optional default index name")
+
+# Simple search model
+class SimpleSearchParams(BaseElasticsearchModel):
+    """Parameters for simple search API."""
+    index_name: str = Field(description="Name of the index to search in (or comma-separated list of indices)")
+    keyword: str = Field(description="Search keyword or phrase")
+    field: Optional[str] = Field(None, description="Field to search in (omit for full-text search across all fields)")
+    size: int = Field(10, description="Number of hits to return (default: 10)")
+    from_offset: int = Field(0, description="Starting offset for results (default: 0)")
+    exact_match: bool = Field(False, description="Whether to perform an exact match (term query) or fuzzy match (default: False)")
+
+class CountDocumentsParams(BaseElasticsearchModel):
+    """Parameters for counting documents."""
+    index_name: str = Field(description="Name of the index (or comma-separated list of indices)")
+    query: Optional[Dict[str, Any]] = Field(None, description="Elasticsearch query DSL object (omit to count all documents)")
+
+class MultiSearchParams(BaseElasticsearchModel):
+    """Parameters for multi-search API."""
+    searches: List[Dict[str, Any]] = Field(description="Array of search requests, each containing 'index', 'query' and optional 'from', 'size' parameters")
+
+# Ingest API models
+class CreatePipelineParams(BaseElasticsearchModel):
+    """Parameters for creating an ingest pipeline."""
+    pipeline_id: str = Field(description="ID of the pipeline")
+    processors: List[Dict[str, Any]] = Field(description="Array of processor definitions")
+    description: Optional[str] = Field(None, description="Description of the pipeline")
+
+class GetPipelineParams(BaseElasticsearchModel):
+    """Parameters for getting an ingest pipeline."""
+    pipeline_id: Optional[str] = Field(None, description="ID of the pipeline (omit to get all pipelines)")
+
+class DeletePipelineParams(BaseElasticsearchModel):
+    """Parameters for deleting an ingest pipeline."""
+    pipeline_id: str = Field(description="ID of the pipeline to delete")
+
+class SimulatePipelineParams(BaseElasticsearchModel):
+    """Parameters for simulating an ingest pipeline."""
+    documents: List[Dict[str, Any]] = Field(description="Documents to process through the pipeline")
+    pipeline_id: Optional[str] = Field(None, description="ID of an existing pipeline to simulate (omit if providing inline definition)")
+    pipeline: Optional[Dict[str, Any]] = Field(None, description="Inline pipeline definition")
+    verbose: bool = Field(False, description="Return verbose results")
+
+# Info API models
+class NodeInfoParams(BaseElasticsearchModel):
+    """Parameters for node info API."""
+    node_id: Optional[str] = Field(None, description="Optional specific node ID (omit for all nodes)")
+    metrics: Optional[str] = Field(None, description="Comma-separated list of metrics to retrieve (e.g., 'jvm,os,process')")
+
+class NodeStatsParams(BaseElasticsearchModel):
+    """Parameters for node stats API."""
+    node_id: Optional[str] = Field(None, description="Optional specific node ID (omit for all nodes)")
+    metrics: Optional[str] = Field(None, description="Comma-separated list of metrics to retrieve (e.g., 'jvm,os,process')")
+    index_metrics: Optional[str] = Field(None, description="Comma-separated list of index metrics to retrieve")
+
+class CatIndicesParams(BaseElasticsearchModel):
+    """Parameters for cat indices API."""
+    format: str = Field("json", description="Output format (default: json)")
+    verbose: bool = Field(True, description="Include column headers")
+    headers: Optional[str] = Field(None, description="Comma-separated list of headers to include")
+
+class CatNodesParams(BaseElasticsearchModel):
+    """Parameters for cat nodes API."""
+    format: str = Field("json", description="Output format (default: json)")
+    verbose: bool = Field(True, description="Include column headers")
+    headers: Optional[str] = Field(None, description="Comma-separated list of headers to include")
+
+class CatAliasesParams(BaseElasticsearchModel):
+    """Parameters for cat aliases API."""
+    format: str = Field("json", description="Output format (default: json)")
+    verbose: bool = Field(True, description="Include column headers")
+
+# Template API models
+class CreateIndexTemplateParams(BaseElasticsearchModel):
+    """Parameters for creating an index template."""
+    name: str = Field(description="Name of the template")
+    index_patterns: List[str] = Field(description="List of index patterns this template applies to")
+    template: Dict[str, Any] = Field(description="Template definition with settings, mappings, etc.")
+    version: Optional[int] = Field(None, description="Optional version number")
+    priority: Optional[int] = Field(None, description="Optional priority (higher takes precedence)")
+
+class GetIndexTemplateParams(BaseElasticsearchModel):
+    """Parameters for getting an index template."""
+    name: Optional[str] = Field(None, description="Name of the template to get (omit for all templates)")
+
+class DeleteIndexTemplateParams(BaseElasticsearchModel):
+    """Parameters for deleting an index template."""
+    name: str = Field(description="Name of the template to delete")
+
 
 # Configure logging
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -80,10 +326,34 @@ def format_response(data: Any) -> str:
     if isinstance(data, str):
         return data
     
+    # Handle Pydantic models
+    if hasattr(data, "model_dump"):
+        data = data.model_dump()
+    
     try:
         return json.dumps(data, indent=2)
     except Exception as error:
         return f"Error formatting response: {str(error)}"
+
+# Decorator to validate function parameters using Pydantic models
+def validate_params(model_class):
+    """Decorator to validate function parameters using a Pydantic model.
+    
+    Args:
+        model_class: The Pydantic model class to use for validation
+    """
+    def decorator(func):
+        async def wrapper(*args, **kwargs):
+            try:
+                # Create model instance from kwargs
+                params = model_class(**kwargs)
+                # Update kwargs with validated values
+                kwargs.update(params.model_dump())
+                return await func(*args, **kwargs)
+            except ValidationError as error:
+                return f"Validation error: {error}"
+        return wrapper
+    return decorator
 
 # Check if we're running in serverless mode
 async def check_serverless_mode() -> bool:
@@ -106,8 +376,9 @@ async def check_serverless_mode() -> bool:
 # =============================================================================
 
 @mcp.tool()
+@validate_params(ClusterHealthParams)
 async def cluster_health(
-    index: Optional[str] = None, 
+    index: Optional[str] = None,
     timeout: Optional[str] = None,
     level: Optional[str] = None
 ) -> str:
@@ -116,7 +387,7 @@ async def cluster_health(
     Args:
         index: Optional specific index to check health for
         timeout: Timeout for the health check (e.g., '30s')
-        level: Level of health information to report (cluster, indices, shards)
+        level: Level of health information to report ("cluster", "indices", "shards")
     """
     try:
         # Check if we're in serverless mode
@@ -129,14 +400,14 @@ async def cluster_health(
         if index:
             path += f"/{index}"
         
-        params = []
+        query_params = []
         if timeout:
-            params.append(f"timeout={timeout}")
+            query_params.append(f"timeout={timeout}")
         if level:
-            params.append(f"level={level}")
+            query_params.append(f"level={level}")
         
-        if params:
-            path += f"?{'&'.join(params)}"
+        if query_params:
+            path += f"?{'&'.join(query_params)}"
         
         result = await make_elk_request(path)
         
@@ -147,6 +418,7 @@ async def cluster_health(
         return f"Error getting cluster health: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(ClusterStatsParams)
 async def cluster_stats(node_id: Optional[str] = None) -> str:
     """Get comprehensive statistics about the Elasticsearch cluster.
     
@@ -173,6 +445,7 @@ async def cluster_stats(node_id: Optional[str] = None) -> str:
         return f"Error getting cluster stats: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(ClusterSettingsParams)
 async def cluster_settings(
     action: str,
     settings: Optional[Dict[str, Any]] = None,
@@ -214,6 +487,7 @@ async def cluster_settings(
 # =============================================================================
 
 @mcp.tool()
+@validate_params(CreateIndexParams)
 async def create_index(
     index_name: str,
     settings: Optional[Dict[str, Any]] = None,
@@ -261,6 +535,7 @@ async def create_index(
         return f"Error creating index {index_name}: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(GetIndexParams)
 async def get_index(index_name: str) -> str:
     """Get information about an Elasticsearch index.
     
@@ -275,6 +550,7 @@ async def get_index(index_name: str) -> str:
         return f"Error getting index {index_name}: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(DeleteIndexParams)
 async def delete_index(index_name: str) -> str:
     """Delete an Elasticsearch index.
     
@@ -289,6 +565,7 @@ async def delete_index(index_name: str) -> str:
         return f"Error deleting index {index_name}: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(GetMappingParams)
 async def get_mapping(index_name: str) -> str:
     """Get the mapping for an index.
     
@@ -303,6 +580,7 @@ async def get_mapping(index_name: str) -> str:
         return f"Error getting mapping for index {index_name}: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(UpdateMappingParams)
 async def update_mapping(index_name: str, properties: Dict[str, Any]) -> str:
     """Update the mapping for an index.
     
@@ -322,6 +600,7 @@ async def update_mapping(index_name: str, properties: Dict[str, Any]) -> str:
         return f"Error updating mapping for index {index_name}: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(ListIndicesParams)
 async def list_indices(pattern: Optional[str] = None) -> str:
     """List all indices in the Elasticsearch cluster.
     
@@ -343,6 +622,7 @@ async def list_indices(pattern: Optional[str] = None) -> str:
 # =============================================================================
 
 @mcp.tool()
+@validate_params(IndexDocumentParams)
 async def index_document(
     index_name: str,
     document: Dict[str, Any],
@@ -374,6 +654,7 @@ async def index_document(
         return f"Error indexing document: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(GetDocumentParams)
 async def get_document(
     index_name: str,
     id: str,
@@ -391,14 +672,14 @@ async def get_document(
     try:
         path = f"/{index_name}/_doc/{id}"
         
-        params = []
+        query_params = []
         if source_includes:
-            params.append(f"_source_includes={source_includes}")
+            query_params.append(f"_source_includes={source_includes}")
         if source_excludes:
-            params.append(f"_source_excludes={source_excludes}")
+            query_params.append(f"_source_excludes={source_excludes}")
         
-        if params:
-            path += f"?{'&'.join(params)}"
+        if query_params:
+            path += f"?{'&'.join(query_params)}"
         
         result = await make_elk_request(path)
         
@@ -407,6 +688,7 @@ async def get_document(
         return f"Error getting document: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(DeleteDocumentParams)
 async def delete_document(
     index_name: str,
     id: str,
@@ -416,7 +698,7 @@ async def delete_document(
     
     Args:
         index_name: Name of the index
-        id: Document ID
+        id: Document ID to delete
         refresh: Refresh policy ('true', 'false', 'wait_for')
     """
     try:
@@ -432,6 +714,7 @@ async def delete_document(
         return f"Error deleting document: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(BulkOperationParams)
 async def bulk_operations(
     operations: str,
     index_name: Optional[str] = None,
@@ -440,8 +723,8 @@ async def bulk_operations(
     """Perform multiple document operations in a single request.
     
     Args:
-        operations: Bulk operations in NDJSON format (each action and source doc on a new line)
-        index_name: Optional default index name
+        operations: Bulk operations in NDJSON format
+        index_name: Optional index name to restrict operations to
         refresh: Refresh policy ('true', 'false', 'wait_for')
     """
     try:
@@ -461,6 +744,7 @@ async def bulk_operations(
 # =============================================================================
 
 @mcp.tool()
+@validate_params(SearchParams)
 async def search(
     index_name: str,
     query: Dict[str, Any],
@@ -506,6 +790,7 @@ async def search(
         return f"Error searching documents: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(SimpleSearchParams)
 async def simple_search(
     index_name: str,
     keyword: str,
@@ -551,6 +836,7 @@ async def simple_search(
         return f"Error performing simple search: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(CountDocumentsParams)
 async def count_documents(
     index_name: str,
     query: Optional[Dict[str, Any]] = None
@@ -558,8 +844,8 @@ async def count_documents(
     """Count documents matching a query.
     
     Args:
-        index_name: Name of the index (or comma-separated list of indices)
-        query: Elasticsearch query DSL object (omit to count all documents)
+        index_name: Name of the index to count documents in
+        query: Elasticsearch query DSL object (defaults to match_all if not provided)
     """
     try:
         path = f"/{index_name}/_count"
@@ -573,13 +859,14 @@ async def count_documents(
         return f"Error counting documents: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(MultiSearchParams)
 async def multi_search(
     searches: List[Dict[str, Any]]
 ) -> str:
     """Perform multiple searches in a single request.
     
     Args:
-        searches: Array of search requests, each containing 'index', 'query' and optional 'from', 'size' parameters
+        searches: List of search requests, each can include an 'index' key to specify the index
     """
     try:
         path = "/_msearch"
@@ -587,7 +874,7 @@ async def multi_search(
         # Format the request according to ndjson format required by _msearch
         ndjson_body = ""
         for search in searches:
-            index = search.pop("index", None)
+            index = search.pop("index", None) if isinstance(search, dict) else None
             header = {"index": index} if index else {}
             ndjson_body += json.dumps(header) + "\n"
             ndjson_body += json.dumps(search) + "\n"
@@ -603,6 +890,7 @@ async def multi_search(
 # =============================================================================
 
 @mcp.tool()
+@validate_params(CreatePipelineParams)
 async def create_pipeline(
     pipeline_id: str,
     processors: List[Dict[str, Any]],
@@ -612,8 +900,8 @@ async def create_pipeline(
     
     Args:
         pipeline_id: ID of the pipeline
-        processors: Array of processor definitions
-        description: Description of the pipeline
+        processors: List of processor configurations
+        description: Optional description of the pipeline
     """
     try:
         path = f"/_ingest/pipeline/{pipeline_id}"
@@ -632,11 +920,14 @@ async def create_pipeline(
         return f"Error creating pipeline: {format_response(error)}"
 
 @mcp.tool()
-async def get_pipeline(pipeline_id: Optional[str] = None) -> str:
+@validate_params(GetPipelineParams)
+async def get_pipeline(
+    pipeline_id: Optional[str] = None
+) -> str:
     """Get an ingest pipeline.
     
     Args:
-        pipeline_id: ID of the pipeline (omit to get all pipelines)
+        pipeline_id: ID of the pipeline to retrieve (omit to get all pipelines)
     """
     try:
         path = f"/_ingest/pipeline/{pipeline_id}" if pipeline_id else "/_ingest/pipeline"
@@ -648,7 +939,10 @@ async def get_pipeline(pipeline_id: Optional[str] = None) -> str:
         return f"Error getting pipeline: {format_response(error)}"
 
 @mcp.tool()
-async def delete_pipeline(pipeline_id: str) -> str:
+@validate_params(DeletePipelineParams)
+async def delete_pipeline(
+    pipeline_id: str
+) -> str:
     """Delete an ingest pipeline.
     
     Args:
@@ -664,6 +958,7 @@ async def delete_pipeline(pipeline_id: str) -> str:
         return f"Error deleting pipeline: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(SimulatePipelineParams)
 async def simulate_pipeline(
     documents: List[Dict[str, Any]],
     pipeline_id: Optional[str] = None,
@@ -673,10 +968,10 @@ async def simulate_pipeline(
     """Simulate an ingest pipeline on a set of documents.
     
     Args:
-        documents: Documents to process through the pipeline
-        pipeline_id: ID of an existing pipeline to simulate (omit if providing inline definition)
-        pipeline: Inline pipeline definition
-        verbose: Return verbose results
+        documents: List of documents to process through the pipeline
+        pipeline_id: ID of an existing pipeline to simulate
+        pipeline: Pipeline definition to simulate (used if pipeline_id is not provided)
+        verbose: Whether to include detailed processor results
     """
     try:
         path = "/_ingest/pipeline"
@@ -707,6 +1002,7 @@ async def simulate_pipeline(
 # =============================================================================
 
 @mcp.tool()
+@validate_params(NodeInfoParams)
 async def node_info(
     node_id: Optional[str] = None,
     metrics: Optional[str] = None
@@ -714,8 +1010,8 @@ async def node_info(
     """Get information about nodes in the cluster.
     
     Args:
-        node_id: Optional specific node ID (omit for all nodes)
-        metrics: Comma-separated list of metrics to retrieve (e.g., 'jvm,os,process')
+        node_id: ID of the node to get info for (omit for all nodes)
+        metrics: Specific metrics to retrieve (e.g., 'os,process')
     """
     try:
         # Check if we're in serverless mode
@@ -740,6 +1036,7 @@ async def node_info(
         return f"Error getting node info: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(NodeStatsParams)
 async def node_stats(
     node_id: Optional[str] = None,
     metrics: Optional[str] = None,
@@ -748,9 +1045,9 @@ async def node_stats(
     """Get statistics about nodes in the cluster.
     
     Args:
-        node_id: Optional specific node ID (omit for all nodes)
-        metrics: Comma-separated list of metrics to retrieve (e.g., 'jvm,os,process')
-        index_metrics: Comma-separated list of index metrics to retrieve
+        node_id: ID of the node to get stats for (omit for all nodes)
+        metrics: Specific metrics to retrieve (e.g., 'jvm,os')
+        index_metrics: Index-specific metrics to retrieve
     """
     try:
         # Check if we're in serverless mode
@@ -780,6 +1077,7 @@ async def node_stats(
         return f"Error getting node stats: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(EmptyParams)
 async def cluster_info() -> str:
     """Get basic information about the Elasticsearch cluster.
     """
@@ -795,6 +1093,7 @@ async def cluster_info() -> str:
         return f"Error getting cluster info: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(CatIndicesParams)
 async def cat_indices(
     format: str = "json",
     verbose: bool = True,
@@ -808,15 +1107,15 @@ async def cat_indices(
         headers: Comma-separated list of headers to include
     """
     try:
-        params = [f"format={format}"]
+        query_params = [f"format={format}"]
         
         if verbose:
-            params.append("v=true")
+            query_params.append("v=true")
         
         if headers:
-            params.append(f"h={headers}")
+            query_params.append(f"h={headers}")
         
-        path = f"/_cat/indices?{'&'.join(params)}"
+        path = f"/_cat/indices?{'&'.join(query_params)}"
         
         result = await make_elk_request(path)
         
@@ -825,6 +1124,7 @@ async def cat_indices(
         return f"Error listing indices: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(CatNodesParams)
 async def cat_nodes(
     format: str = "json",
     verbose: bool = True,
@@ -843,15 +1143,15 @@ async def cat_nodes(
         if serverless:
             return "Cat nodes API is not available in Elasticsearch Serverless mode"
             
-        params = [f"format={format}"]
+        query_params = [f"format={format}"]
         
         if verbose:
-            params.append("v=true")
+            query_params.append("v=true")
         
         if headers:
-            params.append(f"h={headers}")
+            query_params.append(f"h={headers}")
         
-        path = f"/_cat/nodes?{'&'.join(params)}"
+        path = f"/_cat/nodes?{'&'.join(query_params)}"
         
         result = await make_elk_request(path)
         
@@ -862,6 +1162,7 @@ async def cat_nodes(
         return f"Error listing nodes: {format_response(error)}"
 
 @mcp.tool()
+@validate_params(CatAliasesParams)
 async def cat_aliases(
     format: str = "json",
     verbose: bool = True
@@ -873,12 +1174,12 @@ async def cat_aliases(
         verbose: Include column headers
     """
     try:
-        params = [f"format={format}"]
+        query_params = [f"format={format}"]
         
         if verbose:
-            params.append("v=true")
+            query_params.append("v=true")
         
-        path = f"/_cat/aliases?{'&'.join(params)}"
+        path = f"/_cat/aliases?{'&'.join(query_params)}"
         
         result = await make_elk_request(path)
         
@@ -891,6 +1192,7 @@ async def cat_aliases(
 # =============================================================================
 
 @mcp.tool()
+@validate_params(CreateIndexTemplateParams)
 async def create_index_template(
     name: str,
     index_patterns: List[str],
@@ -903,9 +1205,9 @@ async def create_index_template(
     Args:
         name: Name of the template
         index_patterns: List of index patterns this template applies to
-        template: Template definition with settings, mappings, etc.
-        version: Optional version number
-        priority: Optional priority (higher takes precedence)
+        template: Template configuration including mappings and settings
+        version: Optional version number for the template
+        priority: Optional priority for the template
     """
     try:
         # Check if we're in serverless mode to remove incompatible settings
@@ -942,11 +1244,14 @@ async def create_index_template(
         return f"Error creating index template: {format_response(error)}"
 
 @mcp.tool()
-async def get_index_template(name: Optional[str] = None) -> str:
+@validate_params(GetIndexTemplateParams)
+async def get_index_template(
+    name: Optional[str] = None
+) -> str:
     """Get index template(s).
     
     Args:
-        name: Name of the template to get (omit for all templates)
+        name: Optional name of the template to retrieve. If not provided, all templates will be returned.
     """
     try:
         path = f"/_index_template/{name}" if name else "/_index_template"
@@ -958,7 +1263,10 @@ async def get_index_template(name: Optional[str] = None) -> str:
         return f"Error getting index template: {format_response(error)}"
 
 @mcp.tool()
-async def delete_index_template(name: str) -> str:
+@validate_params(DeleteIndexTemplateParams)
+async def delete_index_template(
+    name: str
+) -> str:
     """Delete an index template.
     
     Args:

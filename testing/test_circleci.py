@@ -14,13 +14,10 @@ from datetime import datetime, timedelta
 from servers.circleci.circleci_mcp import *
 
 # Use the provided project slugs
-PROJECT_SLUGS = [
-    "circleci/HUAxEremJuGfuD9HAg2Nti/CERU25RsxX8d1WuRFDGsMS",
-    "circleci/HUAxEremJuGfuD9HAg2Nti/6DkLaTptU9ddwvCef1pGA1"
-]
+PROJECT_SLUGS = []
 
 # Extract organization ID from the project slugs
-ORG_ID = "HUAxEremJuGfuD9HAg2Nti" if PROJECT_SLUGS else None
+ORG_ID = "" if PROJECT_SLUGS else None
 ORG_SLUG = f"circleci/{ORG_ID}" if ORG_ID else None
 
 class TestResult:
