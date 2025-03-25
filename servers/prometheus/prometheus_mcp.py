@@ -1,11 +1,154 @@
 import os
 from datetime import datetime, timedelta
 import urllib.parse
-from typing import Dict, List, Any, Optional, Union
 
 from mcp.server.fastmcp import FastMCP, Context
 from prometheus_api_client import PrometheusConnect
 from dotenv import load_dotenv
+from typing import Dict, List, Any, Optional, Union, Literal
+from pydantic import BaseModel, Field, validator, ValidationError
+
+class PrometheusResponse(BaseModel):
+    status: str
+    data: Optional[Dict[str, Any]] = None
+    error: Optional[str] = None
+
+class MetricLabel(BaseModel):
+    name: str
+    value: str
+
+class MetricValue(BaseModel):
+    timestamp: float
+    value: str
+
+class Metric(BaseModel):
+    metric: Dict[str, str]
+    values: Optional[List[List[Union[float, str]]]] = None  # For matrix results
+    value: Optional[List[Union[float, str]]] = None  # For vector results
+
+class QueryMetricsInput(BaseModel):
+    query: str
+    time: Optional[str] = None
+    timeout: Optional[float] = None
+    start: Optional[str] = None
+    end: Optional[str] = None
+    step: Optional[str] = None
+
+class FindMetricsInput(BaseModel):
+    pattern: str
+    limit: int = 50
+
+class AnalyzeMetricInput(BaseModel):
+    metric: str
+    duration: str = "1h"
+    aggregation: Optional[str] = None
+    labels: Optional[str] = None
+
+    @validator('aggregation')
+    def validate_aggregation(cls, v):
+        if v is not None and v.lower() not in ['sum', 'avg', 'min', 'max', 'count']:
+            raise ValueError(f"Unsupported aggregation function: {v}. Use sum, avg, min, max, or count.")
+        return v
+
+    @validator('duration')
+    def validate_duration(cls, v):
+        if not v[-1].lower() in ['h', 'd', 'w']:
+            raise ValueError(f"Unsupported time unit: {v[-1]}. Use h (hours), d (days), or w (weeks).")
+        try:
+            int(v[:-1])
+        except ValueError:
+            raise ValueError(f"Invalid duration format: {v}. Use format like '1h', '2d', etc.")
+        return v
+
+class GetTargetsHealthInput(BaseModel):
+    state: Optional[str] = None
+
+    @validator('state')
+    def validate_state(cls, v):
+        if v is not None and v.lower() not in ['up', 'down']:
+            raise ValueError(f"Invalid state filter: {v}. Use 'up' or 'down'.")
+        return v
+
+class GetAlertSummaryInput(BaseModel):
+    state: Optional[str] = None
+
+    @validator('state')
+    def validate_state(cls, v):
+        if v is not None and v.lower() not in ['firing', 'pending', 'inactive']:
+            raise ValueError(f"Invalid state filter: {v}. Use 'firing', 'pending', or 'inactive'.")
+        return v
+
+class PerformanceAnalysisInput(BaseModel):
+    service: str
+    duration: str = "1d"
+
+    @validator('duration')
+    def validate_duration(cls, v):
+        if not v[-1].lower() in ['h', 'd', 'w']:
+            raise ValueError(f"Unsupported time unit: {v[-1]}. Use h (hours), d (days), or w (weeks).")
+        try:
+            int(v[:-1])
+        except ValueError:
+            raise ValueError(f"Invalid duration format: {v}. Use format like '1h', '2d', etc.")
+        return v
+
+class CapacityPlanningInput(BaseModel):
+    service: str
+    growth_rate: float = 10.0
+
+class AlertInvestigationInput(BaseModel):
+    alert_name: str
+
+class Target(BaseModel):
+    scrapeUrl: str
+    health: str
+    labels: Dict[str, str]
+    lastScrape: str
+    lastError: Optional[str] = None
+    scrapeInterval: Optional[str] = None
+
+class TargetsResponse(BaseModel):
+    activeTargets: List[Target]
+
+class Alert(BaseModel):
+    labels: Dict[str, str]
+    state: str
+    annotations: Dict[str, str]
+    activeAt: Optional[str] = None
+
+class AlertsResponse(BaseModel):
+    alerts: List[Alert]
+
+class Rule(BaseModel):
+    name: str
+    type: str
+    query: str
+    labels: Optional[Dict[str, str]] = None
+    annotations: Optional[Dict[str, str]] = None
+
+class RuleGroup(BaseModel):
+    name: str
+    rules: List[Rule]
+
+class RulesResponse(BaseModel):
+    groups: List[RuleGroup]
+
+class Series(BaseModel):
+    __name__: str
+    labels: Dict[str, str]
+
+class SeriesResponse(BaseModel):
+    data: List[Series]
+
+class QueryResult(BaseModel):
+    resultType: str
+    result: List[Metric]
+
+class QueryResponse(BaseModel):
+    status: str
+    data: QueryResult
+    error: Optional[str] = None
+
 load_dotenv()
 
 # Create an MCP server
@@ -36,6 +179,7 @@ async def make_prometheus_request(endpoint: str, params: Dict[str, Any]) -> Dict
             )
             return {"status": "success", "data": {"resultType": "matrix", "result": result}}
         # Add handlers for other endpoints as needed
+        return {"status": "error", "error": f"Unsupported endpoint: {endpoint}"}
     except Exception as e:
         return {"status": "error", "error": str(e)}
 
@@ -46,8 +190,12 @@ async def get_targets() -> str:
     """Get all Prometheus targets (scrape endpoints) and their status."""
     data = await make_prometheus_request("targets", {})
     
-    if data.get("status") == "error":
-        return f"Error fetching targets: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error fetching targets: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
         
     active_targets = data.get("data", {}).get("activeTargets", [])
     
@@ -67,8 +215,12 @@ async def get_alerts() -> str:
     """Get all current Prometheus alerts."""
     data = await make_prometheus_request("alerts", {})
     
-    if data.get("status") == "error":
-        return f"Error fetching alerts: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error fetching alerts: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     alerts = data.get("data", {}).get("alerts", [])
     
@@ -93,8 +245,12 @@ async def get_rules() -> str:
     """Get all Prometheus rules (recording rules and alerting rules)."""
     data = await make_prometheus_request("rules", {})
     
-    if data.get("status") == "error":
-        return f"Error fetching rules: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error fetching rules: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     groups = data.get("data", {}).get("groups", [])
     
@@ -135,8 +291,12 @@ async def get_metrics(pattern: str) -> str:
     # Use the series API to find metrics matching the pattern
     data = await make_prometheus_request("series", {"match[]": f"{pattern}"})
     
-    if data.get("status") == "error":
-        return f"Error fetching metrics: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error fetching metrics: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     series = data.get("data", [])
     
@@ -181,6 +341,17 @@ async def query_metrics(
     end: Optional[str] = None,
     step: Optional[str] = None
 ) -> str:
+    try:
+        input_model = QueryMetricsInput(
+            query=query,
+            time=time,
+            timeout=timeout,
+            start=start,
+            end=end,
+            step=step
+        )
+    except ValidationError as e:
+        return f"Input validation error: {str(e)}"
     """
     Query Prometheus using PromQL.
     
@@ -231,8 +402,12 @@ async def query_metrics(
     
     data = await make_prometheus_request(endpoint, params)
     
-    if data.get("status") == "error":
-        return f"Error executing query: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error executing query: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     result_type = data.get("data", {}).get("resultType")
     results = data.get("data", {}).get("result", [])
@@ -301,11 +476,22 @@ async def find_metrics(
         pattern: Pattern to match against metric names (use .* as wildcard)
         limit: Maximum number of results to return
     """
+    try:
+        input_model = FindMetricsInput(
+            pattern=pattern,
+            limit=limit
+        )
+    except ValidationError as e:
+        return f"Input validation error: {str(e)}"
     # Use the series API to find metrics matching the pattern
     data = await make_prometheus_request("series", {"match[]": f"{pattern}"})
     
-    if data.get("status") == "error":
-        return f"Error finding metrics: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error finding metrics: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     series = data.get("data", [])
     
@@ -367,6 +553,15 @@ async def analyze_metric(
         aggregation: Optional aggregation function (sum, avg, min, max)
         labels: Optional label filters in the format 'label1=value1,label2=value2'
     """
+    try:
+        input_model = AnalyzeMetricInput(
+            metric=metric,
+            duration=duration,
+            aggregation=aggregation,
+            labels=labels
+        )
+    except ValidationError as e:
+        return f"Input validation error: {str(e)}"
     # Convert duration to start time
     now = datetime.now()
     
@@ -425,8 +620,12 @@ async def analyze_metric(
     
     data = await make_prometheus_request("query_range", params)
     
-    if data.get("status") == "error":
-        return f"Error analyzing metric: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error analyzing metric: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     result_type = data.get("data", {}).get("resultType")
     results = data.get("data", {}).get("result", [])
@@ -557,10 +756,18 @@ async def get_targets_health(
     Args:
         state: Optional filter by target state ('up' or 'down')
     """
+    try:
+        input_model = GetTargetsHealthInput(state=state)
+    except ValidationError as e:
+        return f"Input validation error: {str(e)}"
     data = await make_prometheus_request("targets", {})
     
-    if data.get("status") == "error":
-        return f"Error fetching targets: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error fetching targets: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     active_targets = data.get("data", {}).get("activeTargets", [])
     
@@ -630,10 +837,19 @@ async def get_alert_summary(
     Args:
         state: Optional filter by alert state ('firing', 'pending', or 'inactive')
     """
+    try:
+        input_model = GetAlertSummaryInput(state=state)
+    except ValidationError as e:
+        return f"Input validation error: {str(e)}"
+    
     data = await make_prometheus_request("alerts", {})
     
-    if data.get("status") == "error":
-        return f"Error fetching alerts: {data.get('error')}"
+    try:
+        response_model = PrometheusResponse(**data)
+        if response_model.status == "error":
+            return f"Error fetching alerts: {response_model.error}"
+    except ValidationError as e:
+        return f"Response validation error: {str(e)}"
     
     alerts = data.get("data", {}).get("alerts", [])
     
