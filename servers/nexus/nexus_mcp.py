@@ -1,9 +1,162 @@
 import os
 import json
 import requests
-from typing import Dict, List, Optional, Any, Union
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+from typing import Dict, List, Optional, Any, Union, Literal
+from pydantic import BaseModel, Field, validator, model_validator
+
+class ApiResponse(BaseModel):
+    """Base model for API responses"""
+    message: Optional[str] = None
+    error: Optional[str] = None
+
+
+
+class RepositoryStorage(BaseModel):
+    """Repository storage configuration"""
+    blobStoreName: str
+    strictContentTypeValidation: bool = True
+    writePolicy: Optional[str] = None
+
+
+class MavenConfig(BaseModel):
+    """Maven-specific repository configuration"""
+    versionPolicy: str = "MIXED"
+    layoutPolicy: str = "STRICT"
+
+
+class ProxyConfig(BaseModel):
+    """Proxy repository configuration"""
+    remoteUrl: str
+    contentMaxAge: int = -1
+    metadataMaxAge: int = 1440
+
+
+class GroupConfig(BaseModel):
+    """Group repository configuration"""
+    memberNames: List[str] = Field(default_factory=list)
+
+
+class CleanupConfig(BaseModel):
+    """Repository cleanup configuration"""
+    policyNames: List[str] = Field(default_factory=list)
+
+
+class RepositoryModel(BaseModel):
+    """Repository model"""
+    name: str
+    format: Optional[str] = None
+    type: Optional[str] = None
+    online: bool = True
+    storage: RepositoryStorage
+    maven: Optional[MavenConfig] = None
+    proxy: Optional[ProxyConfig] = None
+    group: Optional[GroupConfig] = None
+    cleanup: Optional[CleanupConfig] = None
+
+
+class RepositoryCreateRequest(RepositoryModel):
+    """Repository creation request model"""
+    
+    @model_validator(mode="after")
+    def validate_repository_type(self):
+        """Validate repository type-specific fields"""
+        if self.type == "hosted" and "writePolicy" not in self.storage.model_dump(exclude_unset=True):
+            self.storage.writePolicy = "ALLOW"
+        
+        if self.type == "proxy" and not self.proxy:
+            self.proxy = ProxyConfig(remoteUrl="http://example.com/repository")
+        
+        if self.type == "group" and not self.group:
+            self.group = GroupConfig()
+            
+        return self
+
+
+
+class UserRole(BaseModel):
+    """User role model"""
+    id: str
+    source: Optional[str] = "default"
+
+
+class UserModel(BaseModel):
+    """User model"""
+    userId: str
+    firstName: str
+    lastName: str
+    emailAddress: str
+    status: str = "active"
+    roles: List[Union[str, UserRole]] = Field(default_factory=list)
+    source: Optional[str] = "default"
+    password: Optional[str] = None
+
+
+class RoleModel(BaseModel):
+    """Role model"""
+    id: str
+    name: str
+    description: str
+    privileges: List[str] = Field(default_factory=list)
+    roles: List[str] = Field(default_factory=list)
+
+
+
+class ComponentSearchParams(BaseModel):
+    """Component search parameters"""
+    repository: Optional[str] = None
+    keyword: Optional[str] = None
+    format: Optional[str] = None
+
+
+class ComponentModel(BaseModel):
+    """Component model"""
+    model_config = {"extra": "allow"}
+
+
+
+class LdapServerModel(BaseModel):
+    """LDAP server model"""
+    name: str
+    protocol: str
+    host: str
+    port: int
+    searchBase: str
+    authScheme: str = "simple"
+    connectionTimeoutSeconds: int = 30
+    retryDelaySeconds: int = 300
+    maxIncidents: int = 3
+
+
+
+class ContentSelectorModel(BaseModel):
+    """Content selector model"""
+    name: str
+    description: str
+    expression: str
+
+
+
+class WebhookModel(BaseModel):
+    """Webhook model"""
+    name: str
+    url: str
+    eventTypes: List[str]
+    secret: Optional[str] = None
+    
+    model_config = {"extra": "allow"}
+
+
+
+class FirewallConfigModel(BaseModel):
+    """Firewall configuration model"""
+    enabled: bool
+    url: str
+    authenticationType: str
+    username: Optional[str] = None
+    password: Optional[str] = None
+
 load_dotenv()
 # Initialize MCP server
 mcp = FastMCP("nexus-api")
@@ -36,14 +189,14 @@ def get_auth():
     )
 
 # Helper functions
-def make_request(method: str, endpoint: str, data: Optional[Dict] = None, try_alt_versions=True) -> Dict:
+def make_request(method: str, endpoint: str, data: Optional[Union[Dict, BaseModel]] = None, try_alt_versions=True) -> Dict:
     """
     Make a request to the Nexus API with proper error handling.
     
     Args:
         method: HTTP method to use (GET, POST, PUT, DELETE)
         endpoint: API endpoint to call
-        data: Optional data to send with the request
+        data: Optional data to send with the request (Dict or Pydantic model)
         try_alt_versions: Whether to try alternative API versions if the primary request fails
         
     Returns:
@@ -53,6 +206,9 @@ def make_request(method: str, endpoint: str, data: Optional[Dict] = None, try_al
     url = f"{base_url}/{endpoint}"
     auth = get_auth()
     headers = {"Content-Type": "application/json"}
+    
+    if data is not None and isinstance(data, BaseModel):
+        data = data.model_dump(exclude_unset=True)
     
     try:
         if method == "GET":
@@ -185,6 +341,14 @@ def get_all_repositories() -> str:
         A JSON string containing repository details.
     """
     result = make_request("GET", "repositories")
+    
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_repos = [RepositoryModel(**repo).model_dump() for repo in result]
+            return json.dumps(validated_repos, indent=2)
+        except Exception as e:
+            return json.dumps(result, indent=2)
+    
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -203,60 +367,55 @@ def create_repository(repository_type: str, repository_format: str, repository_n
     Returns:
         A JSON string with the result of the operation.
     """
-    # Different repository types require different payloads
-    # Create a base payload then customize based on type
+    storage = RepositoryStorage(
+        blobStoreName=blob_store_name,
+        strictContentTypeValidation=True
+    )
     
-    # Base payload for all repository types
-    data = {
-        "name": repository_name,
-        "online": online,
-        "storage": {
-            "blobStoreName": blob_store_name,
-            "strictContentTypeValidation": True
-        }
-    }
-    
-    # Special handling for hosted repositories - add write policy
     if repository_type == "hosted":
-        data["storage"]["writePolicy"] = write_policy
+        storage.writePolicy = write_policy
+        
+    repo_model = RepositoryCreateRequest(
+        name=repository_name,
+        type=repository_type,
+        format=repository_format,
+        online=online,
+        storage=storage
+    )
     
     # Special handling for proxy repositories - add remote settings
     if repository_type == "proxy":
-        data["proxy"] = {
-            "remoteUrl": "http://example.com/repository",
-            "contentMaxAge": -1,
-            "metadataMaxAge": 1440
-        }
+        repo_model.proxy = ProxyConfig(
+            remoteUrl="http://example.com/repository",
+            contentMaxAge=-1,
+            metadataMaxAge=1440
+        )
     
     # Special handling for group repositories - add member repositories
     if repository_type == "group":
-        data["group"] = {
-            "memberNames": []
-        }
+        repo_model.group = GroupConfig(memberNames=[])
     
     # Add format-specific fields when needed
     if repository_format == "maven2":
-        data["maven"] = {
-            "versionPolicy": "MIXED",
-            "layoutPolicy": "STRICT"
-        }
+        repo_model.maven = MavenConfig(
+            versionPolicy="MIXED",
+            layoutPolicy="STRICT"
+        )
     elif repository_format == "npm":
-        data["cleanup"] = {
-            "policyNames": []
-        }
+        repo_model.cleanup = CleanupConfig(policyNames=[])
     
     # Try with format/type (standard for Nexus 3)
-    result = make_request("POST", f"repositories/{repository_format}/{repository_type}", data, try_alt_versions=False)
+    result = make_request("POST", f"repositories/{repository_format}/{repository_type}", repo_model, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
     
     # Try with v1 API version
-    result = make_request("POST", f"v1/repositories/{repository_format}/{repository_type}", data, try_alt_versions=False)
+    result = make_request("POST", f"v1/repositories/{repository_format}/{repository_type}", repo_model, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
         
     # Try with simpler endpoint structure
-    result = make_request("POST", "repositories", data, try_alt_versions=False)
+    result = make_request("POST", "repositories", repo_model, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
     
@@ -278,28 +437,23 @@ def update_repository(repository_name: str, repository_type: str, repository_for
         A JSON string with the result of the operation.
     """
     try:
-        data = json.loads(repository_data)
+        json_data = json.loads(repository_data)
         
-        # Ensure all required fields are present for update
-        # Add type and format if not present
-        if "type" not in data:
-            data["type"] = repository_type
-        if "format" not in data:
-            data["format"] = repository_format
+        if "type" not in json_data:
+            json_data["type"] = repository_type
+        if "format" not in json_data:
+            json_data["format"] = repository_format
+            
+        if "storage" not in json_data:
+            json_data["storage"] = {"blobStoreName": "default", "strictContentTypeValidation": True}
+        elif "blobStoreName" not in json_data["storage"]:
+            json_data["storage"]["blobStoreName"] = "default"
+            
+        if repository_type == "hosted" and "writePolicy" not in json_data.get("storage", {}):
+            json_data["storage"]["writePolicy"] = "ALLOW"
+            
+        repo_model = RepositoryModel(**json_data)
         
-        # Make sure storage exists
-        if "storage" not in data:
-            data["storage"] = {
-                "blobStoreName": "default",
-                "strictContentTypeValidation": True
-            }
-            
-        # Handle hosted type and write policy
-        if repository_type == "hosted" and "writePolicy" not in data.get("storage", {}):
-            if "storage" not in data:
-                data["storage"] = {}
-            data["storage"]["writePolicy"] = "ALLOW"
-            
         # Try various API endpoints and orders
         endpoints = [
             f"repositories/{repository_format}/{repository_type}/{repository_name}",
@@ -310,12 +464,12 @@ def update_repository(repository_name: str, repository_type: str, repository_for
         ]
         
         for endpoint in endpoints:
-            result = make_request("PUT", endpoint, data, try_alt_versions=False)
+            result = make_request("PUT", endpoint, repo_model, try_alt_versions=False)
             if "error" not in result:
                 return json.dumps(result, indent=2)
                 
         # Try a POST instead of PUT to rebuild it (some versions work this way)
-        result = make_request("POST", f"repositories/{repository_format}/{repository_type}", data, try_alt_versions=False)
+        result = make_request("POST", f"repositories/{repository_format}/{repository_type}", repo_model, try_alt_versions=False)
         if "error" not in result:
             return json.dumps(result, indent=2)
             
@@ -324,6 +478,8 @@ def update_repository(repository_name: str, repository_type: str, repository_for
         
     except json.JSONDecodeError:
         return json.dumps({"error": "Invalid JSON format for repository_data"}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"Validation error: {str(e)}"}, indent=2)
 
 @mcp.tool()
 def delete_repository(repository_name: str) -> str:
@@ -338,6 +494,14 @@ def delete_repository(repository_name: str) -> str:
     """
     endpoint = f"repositories/{repository_name}"
     result = make_request("DELETE", endpoint)
+    
+    if "error" not in result:
+        try:
+            response = ApiResponse(message=result.get("message", "Repository deleted successfully"))
+            return json.dumps(response.model_dump(), indent=2)
+        except Exception as e:
+            pass
+    
     return json.dumps(result, indent=2)
 
 # ========== 2. User and Role Management Endpoints ==========
@@ -351,6 +515,14 @@ def get_all_users() -> str:
         A JSON string containing user details.
     """
     result = make_request("GET", "users")
+    
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_users = [UserModel(**user).model_dump() for user in result]
+            return json.dumps(validated_users, indent=2)
+        except Exception as e:
+            return json.dumps(result, indent=2)
+    
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -370,17 +542,17 @@ def create_user(user_id: str, first_name: str, last_name: str, email: str, passw
     Returns:
         A JSON string with the result of the operation.
     """
-    data = {
-        "userId": user_id,
-        "firstName": first_name,
-        "lastName": last_name,
-        "emailAddress": email,
-        "password": password,
-        "status": status,
-        "roles": roles or []
-    }
+    user = UserModel(
+        userId=user_id,
+        firstName=first_name,
+        lastName=last_name,
+        emailAddress=email,
+        password=password,
+        status=status,
+        roles=roles or []
+    )
     
-    result = make_request("POST", "users", data)
+    result = make_request("POST", "users", user)
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -399,17 +571,15 @@ def update_user(user_id: str, first_name: str, last_name: str, email: str, statu
     Returns:
         A JSON string with the result of the operation.
     """
-    data = {
-        "userId": user_id,
-        "firstName": first_name,
-        "lastName": last_name,
-        "emailAddress": email,
-        "status": status,
-        "roles": roles or []
-    }
-    
-    # Some Nexus versions require source field
-    data["source"] = "default"
+    user = UserModel(
+        userId=user_id,
+        firstName=first_name,
+        lastName=last_name,
+        emailAddress=email,
+        status=status,
+        roles=roles or [],
+        source="default"
+    )
     
     # Some versions require role objects instead of string IDs
     if roles:
@@ -417,15 +587,13 @@ def update_user(user_id: str, first_name: str, last_name: str, email: str, statu
         user_get_result = make_request("GET", f"users/{user_id}", try_alt_versions=True)
         try:
             if "error" not in user_get_result and "source" in user_get_result:
-                data["source"] = user_get_result.get("source", "default")
+                user.source = user_get_result.get("source", "default")
                 
             # Check if roles are objects or strings
             if "error" not in user_get_result and "roles" in user_get_result:
                 if user_get_result["roles"] and isinstance(user_get_result["roles"][0], dict):
-                    # Need to transform roles into objects
-                    data["roles"] = [{"id": role_id, "source": "default"} for role_id in roles]
+                    user.roles = [UserRole(id=role_id, source="default") for role_id in roles]
         except:
-            # If error in fetching user, continue with default data format
             pass
     
     # Try various endpoints in different formats
@@ -439,18 +607,17 @@ def update_user(user_id: str, first_name: str, last_name: str, email: str, statu
     ]
     
     for endpoint in endpoints:
-        result = make_request("PUT", endpoint, data, try_alt_versions=False)
+        result = make_request("PUT", endpoint, user, try_alt_versions=False)
         if "error" not in result:
             return json.dumps(result, indent=2)
     
     # Some Nexus versions require DELETE + POST instead of PUT
-    # Try to delete and recreate the user with new data
     try:
         delete_result = make_request("DELETE", f"users/{user_id}", try_alt_versions=True)
         if "error" not in delete_result:
             # Need to include password for create
-            data["password"] = "tempPassword123!"  # This is a temporary password for the test
-            create_result = make_request("POST", "users", data, try_alt_versions=True)
+            user.password = "tempPassword123!"  # This is a temporary password for the test
+            create_result = make_request("POST", "users", user, try_alt_versions=True)
             if "error" not in create_result:
                 return json.dumps(create_result, indent=2)
     except:
@@ -463,9 +630,9 @@ def update_user(user_id: str, first_name: str, last_name: str, email: str, statu
         "firstName": first_name,
         "lastName": last_name,
         "emailAddress": email,
-        "source": "default",
+        "source": user.source,
         "status": status,
-        "roles": roles or [],
+        "roles": [r if isinstance(r, str) else r.model_dump() for r in user.roles],
         "message": "User update successful (mock)"
     }, indent=2)
 
@@ -481,6 +648,14 @@ def delete_user(user_id: str) -> str:
         A JSON string with the result of the operation.
     """
     result = make_request("DELETE", f"users/{user_id}")
+    
+    if "error" not in result:
+        try:
+            response = ApiResponse(message=result.get("message", "User deleted successfully"))
+            return json.dumps(response.model_dump(), indent=2)
+        except Exception as e:
+            pass
+    
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -492,6 +667,14 @@ def list_roles() -> str:
         A JSON string containing role details.
     """
     result = make_request("GET", "roles")
+    
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_roles = [RoleModel(**role).model_dump() for role in result]
+            return json.dumps(validated_roles, indent=2)
+        except Exception as e:
+            return json.dumps(result, indent=2)
+    
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -509,15 +692,15 @@ def create_role(role_id: str, name: str, description: str, privileges: List[str]
     Returns:
         A JSON string with the result of the operation.
     """
-    data = {
-        "id": role_id,
-        "name": name,
-        "description": description,
-        "privileges": privileges,
-        "roles": roles or []
-    }
+    role = RoleModel(
+        id=role_id,
+        name=name,
+        description=description,
+        privileges=privileges,
+        roles=roles or []
+    )
     
-    result = make_request("POST", "roles", data)
+    result = make_request("POST", "roles", role)
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -529,6 +712,14 @@ def list_privileges() -> str:
         A JSON string containing privilege details.
     """
     result = make_request("GET", "privileges")
+    
+    if "error" not in result and isinstance(result, list):
+        try:
+            response = ApiResponse(message="Privileges retrieved successfully")
+            return json.dumps(result, indent=2)
+        except Exception as e:
+            pass
+    
     return json.dumps(result, indent=2)
 
 # ========== 3. Content Management Endpoints ==========
@@ -546,14 +737,20 @@ def search_components(repository: Optional[str] = None, keyword: Optional[str] =
     Returns:
         A JSON string containing search results.
     """
+    search_params = ComponentSearchParams(
+        repository=repository,
+        keyword=keyword,
+        format=format
+    )
+    
     # Build query parameters
     params = []
-    if repository:
-        params.append(f"repository={repository}")
-    if keyword:
-        params.append(f"keyword={keyword}")
-    if format:
-        params.append(f"format={format}")
+    if search_params.repository:
+        params.append(f"repository={search_params.repository}")
+    if search_params.keyword:
+        params.append(f"keyword={search_params.keyword}")
+    if search_params.format:
+        params.append(f"format={search_params.format}")
     
     query_str = f"?{'&'.join(params)}" if params else ""
     
@@ -574,7 +771,7 @@ def search_components(repository: Optional[str] = None, keyword: Optional[str] =
         return json.dumps(result, indent=2)
     
     # Try with different repository name (maven-central is common)
-    if repository == "maven-central":
+    if search_params.repository == "maven-central":
         params = [p for p in params if not p.startswith("repository=")]
         params.append("repository=maven-releases")
         query_str = f"?{'&'.join(params)}" if params else ""
@@ -599,12 +796,16 @@ def upload_component(repository: str, component_format: str, component_data: str
         A JSON string with the result of the operation.
     """
     try:
-        data = json.loads(component_data)
+        json_data = json.loads(component_data)
+        component = ComponentModel.model_validate(json_data)
+        
         endpoint = f"components?repository={repository}"
-        result = make_request("POST", endpoint, data)
+        result = make_request("POST", endpoint, component.model_dump(exclude_unset=True))
         return json.dumps(result, indent=2)
     except json.JSONDecodeError:
         return json.dumps({"error": "Invalid JSON format for component_data"}, indent=2)
+    except Exception as e:
+        return json.dumps({"error": f"Validation error: {str(e)}"}, indent=2)
 
 # ========== 4. LDAP and External Authentication Endpoints ==========
 
@@ -618,13 +819,21 @@ def list_ldap_servers() -> str:
     """
     # First try with security prefix (common in Nexus 3)
     result = make_request("GET", "security/ldap", try_alt_versions=False)
-    if "error" not in result:
-        return json.dumps(result, indent=2)
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_servers = [LdapServerModel(**server).model_dump() for server in result]
+            return json.dumps(validated_servers, indent=2)
+        except Exception as e:
+            pass
     
     # Try Nexus 3 specific endpoint
     result = make_request("GET", "security/ldap/servers", try_alt_versions=False)
-    if "error" not in result:
-        return json.dumps(result, indent=2)
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_servers = [LdapServerModel(**server).model_dump() for server in result]
+            return json.dumps(validated_servers, indent=2)
+        except Exception as e:
+            pass
     
     # Try the original endpoint
     result = make_request("GET", "ldap/servers")
@@ -659,30 +868,30 @@ def create_ldap_server(
     Returns:
         A JSON string with the result of the operation.
     """
-    data = {
-        "name": name,
-        "protocol": protocol,
-        "host": host,
-        "port": port,
-        "searchBase": search_base,
-        "authScheme": authentication_scheme,
-        "connectionTimeoutSeconds": connection_timeout_seconds,
-        "retryDelaySeconds": retry_delay_seconds,
-        "maxIncidents": max_incidents
-    }
+    ldap_server = LdapServerModel(
+        name=name,
+        protocol=protocol,
+        host=host,
+        port=port,
+        searchBase=search_base,
+        authScheme=authentication_scheme,
+        connectionTimeoutSeconds=connection_timeout_seconds,
+        retryDelaySeconds=retry_delay_seconds,
+        maxIncidents=max_incidents
+    )
     
     # Try with security prefix first (common in Nexus 3)
-    result = make_request("POST", "security/ldap", data, try_alt_versions=False)
+    result = make_request("POST", "security/ldap", ldap_server, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
     
     # Try Nexus 3 specific endpoint
-    result = make_request("POST", "security/ldap/servers", data, try_alt_versions=False)
+    result = make_request("POST", "security/ldap/servers", ldap_server, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
     
     # Try the original endpoint
-    result = make_request("POST", "ldap/servers", data)
+    result = make_request("POST", "ldap/servers", ldap_server)
     return json.dumps(result, indent=2)
 
 # ========== 5. Content Selectors Endpoints ==========
@@ -696,6 +905,12 @@ def list_content_selectors() -> str:
         A JSON string containing content selector details.
     """
     result = make_request("GET", "content-selectors")
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_selectors = [ContentSelectorModel(**selector).model_dump() for selector in result]
+            return json.dumps(validated_selectors, indent=2)
+        except Exception as e:
+            pass
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -711,13 +926,13 @@ def create_content_selector(name: str, description: str, expression: str) -> str
     Returns:
         A JSON string with the result of the operation.
     """
-    data = {
-        "name": name,
-        "description": description,
-        "expression": expression
-    }
+    content_selector = ContentSelectorModel(
+        name=name,
+        description=description,
+        expression=expression
+    )
     
-    result = make_request("POST", "content-selectors", data)
+    result = make_request("POST", "content-selectors", content_selector)
     return json.dumps(result, indent=2)
 
 # ========== 6. Webhooks and Automation Endpoints ==========
@@ -734,18 +949,30 @@ def list_webhooks() -> str:
     
     # First try with v1/webhooks (common in recent versions)
     result = make_request("GET", "webhooks", try_alt_versions=False)
-    if "error" not in result:
-        return json.dumps(result, indent=2)
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_webhooks = [WebhookModel(**webhook).model_dump() for webhook in result]
+            return json.dumps(validated_webhooks, indent=2)
+        except Exception as e:
+            pass
     
     # Try with security prefix
     result = make_request("GET", "security/webhooks", try_alt_versions=False)
-    if "error" not in result:
-        return json.dumps(result, indent=2)
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_webhooks = [WebhookModel(**webhook).model_dump() for webhook in result]
+            return json.dumps(validated_webhooks, indent=2)
+        except Exception as e:
+            pass
     
     # Try alternate naming (varies between versions)
     result = make_request("GET", "events/webhooks", try_alt_versions=False)
-    if "error" not in result:
-        return json.dumps(result, indent=2)
+    if "error" not in result and isinstance(result, list):
+        try:
+            validated_webhooks = [WebhookModel(**webhook).model_dump() for webhook in result]
+            return json.dumps(validated_webhooks, indent=2)
+        except Exception as e:
+            pass
     
     # Return an empty list as a fallback - some Nexus versions don't support webhooks
     return json.dumps([], indent=2)
@@ -765,36 +992,38 @@ def create_webhook(name: str, url: str, webhook_type: str, secret: Optional[str]
     Returns:
         A JSON string with the result of the operation.
     """
-    data = {
+    webhook_data = {
         "name": name,
         "url": url,
         "eventTypes": [webhook_type]
     }
     
     if secret:
-        data["secret"] = secret
+        webhook_data["secret"] = secret
     
     if webhook_config:
         try:
             config = json.loads(webhook_config)
-            data.update(config)
+            webhook_data.update(config)
         except json.JSONDecodeError:
             return json.dumps({"error": "Invalid JSON format for webhook_config"}, indent=2)
+    
+    webhook = WebhookModel(**webhook_data)
     
     # Try multiple endpoints for different Nexus versions
     
     # First try with v1/webhooks (common in recent versions)
-    result = make_request("POST", "webhooks", data, try_alt_versions=False)
+    result = make_request("POST", "webhooks", webhook, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
     
     # Try with security prefix
-    result = make_request("POST", "security/webhooks", data, try_alt_versions=False)
+    result = make_request("POST", "security/webhooks", webhook, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
     
     # Try alternate naming (varies between versions)
-    result = make_request("POST", "events/webhooks", data, try_alt_versions=False)
+    result = make_request("POST", "events/webhooks", webhook, try_alt_versions=False)
     if "error" not in result:
         return json.dumps(result, indent=2)
     
@@ -812,6 +1041,12 @@ def get_firewall_config() -> str:
         A JSON string containing firewall configuration details.
     """
     result = make_request("GET", "iq")
+    if "error" not in result:
+        try:
+            validated_config = FirewallConfigModel(**result).model_dump()
+            return json.dumps(validated_config, indent=2)
+        except Exception as e:
+            pass
     return json.dumps(result, indent=2)
 
 @mcp.tool()
@@ -829,18 +1064,15 @@ def update_firewall_config(enabled: bool, url: str, authentication_type: str, us
     Returns:
         A JSON string with the result of the operation.
     """
-    data = {
-        "enabled": enabled,
-        "url": url,
-        "authenticationType": authentication_type
-    }
+    firewall_config = FirewallConfigModel(
+        enabled=enabled,
+        url=url,
+        authenticationType=authentication_type,
+        username=username,
+        password=password
+    )
     
-    if username:
-        data["username"] = username
-    if password:
-        data["password"] = password
-    
-    result = make_request("PUT", "iq", data)
+    result = make_request("PUT", "iq", firewall_config)
     return json.dumps(result, indent=2)
 
 # Run the server
