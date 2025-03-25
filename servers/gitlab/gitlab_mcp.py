@@ -13,10 +13,12 @@ Environment variables:
 
 import os
 import json
-from typing import Any, Dict, List, Optional, Union
-import urllib
+import base64
+from typing import Any, Dict, List, Optional, Union, Literal
+import urllib.parse
 import httpx
 from mcp.server.fastmcp import FastMCP, Context
+from pydantic import BaseModel, Field, validator
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -34,10 +36,10 @@ if not GITLAB_PERSONAL_ACCESS_TOKEN:
 async def make_gitlab_request(
     method: str,
     endpoint: str,
-    params: Dict[str, Any] = None,
-    json_data: Dict[str, Any] = None,
-    binary_data: bytes = None,
-    headers: Dict[str, str] = None
+    params: Optional[Dict[str, Any]] = None,
+    json_data: Optional[Dict[str, Any]] = None,
+    binary_data: Optional[bytes] = None,
+    headers: Optional[Dict[str, str]] = None
 ) -> Dict[str, Any]:
     """Make a request to the GitLab API with proper error handling."""
     url = f"{GITLAB_API_URL}/{endpoint}"
@@ -78,6 +80,120 @@ async def make_gitlab_request(
         except Exception as e:
             raise ValueError(f"Error making GitLab API request: {str(e)}")
 
+# Pydantic models for validation (used internally)
+
+# File operations models
+class CreateOrUpdateFileModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    file_path: str = Field(description="Path where to create/update the file")
+    content: str = Field(description="Content of the file")
+    commit_message: str = Field(description="Commit message")
+    branch: str = Field(description="Branch to create/update the file in")
+    previous_path: Optional[str] = Field(None, description="Path of the file to move/rename (optional)")
+
+class FileInfo(BaseModel):
+    file_path: str = Field(description="Path of the file")
+    content: str = Field(description="Content of the file")
+    update: bool = Field(False, description="Whether to update an existing file")
+
+class PushFilesModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    branch: str = Field(description="Branch to push to")
+    files: List[FileInfo] = Field(description="List of files to push")
+    commit_message: str = Field(description="Commit message")
+
+class GetFileContentsModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    file_path: str = Field(description="Path to file/directory")
+    ref: Optional[str] = Field(None, description="Branch/tag/commit to get contents from (optional)")
+
+# Repository models
+class SearchRepositoriesModel(BaseModel):
+    search: str = Field(description="Search query")
+    page: int = Field(1, description="Page number for pagination (optional, default: 1)")
+    per_page: int = Field(20, description="Results per page (optional, default: 20)")
+
+class CreateRepositoryModel(BaseModel):
+    name: str = Field(description="Project name")
+    description: Optional[str] = Field(None, description="Project description (optional)")
+    visibility: str = Field("private", description="'private', 'internal', or 'public' (optional, default: 'private')")
+    initialize_with_readme: bool = Field(False, description="Initialize with README (optional, default: False)")
+    
+    @validator('visibility')
+    def validate_visibility(cls, v):
+        if v not in ["private", "internal", "public"]:
+            raise ValueError("Visibility must be one of: 'private', 'internal', 'public'")
+        return v
+
+class ForkRepositoryModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    namespace: Optional[str] = Field(None, description="Namespace to fork to (optional)")
+
+class CreateBranchModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    branch: str = Field(description="Name for new branch")
+    ref: str = Field("main", description="Source branch/commit for new branch (optional, default: 'main')")
+
+class ListBranchesModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    search: Optional[str] = Field(None, description="Filter branches by name (optional)")
+
+# Issue models
+class CreateIssueModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    title: str = Field(description="Issue title")
+    description: Optional[str] = Field(None, description="Issue description (optional)")
+    assignee_ids: Optional[List[int]] = Field(None, description="User IDs to assign (optional)")
+    labels: Optional[List[str]] = Field(None, description="Labels to add (optional)")
+    milestone_id: Optional[int] = Field(None, description="Milestone ID (optional)")
+
+class ListIssuesModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    state: str = Field("opened", description="Filter issues by state ('opened', 'closed', or 'all') (optional, default: 'opened')")
+    labels: Optional[List[str]] = Field(None, description="Filter issues by labels (optional)")
+    milestone: Optional[str] = Field(None, description="Filter issues by milestone (optional)")
+    search: Optional[str] = Field(None, description="Search issues by title and description (optional)")
+    page: int = Field(1, description="Page number (optional, default: 1)")
+    per_page: int = Field(20, description="Number of items per page (optional, default: 20)")
+
+# Merge request models
+class CreateMergeRequestModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    title: str = Field(description="MR title")
+    source_branch: str = Field(description="Branch containing changes")
+    target_branch: str = Field(description="Branch to merge into")
+    description: Optional[str] = Field(None, description="MR description (optional)")
+    draft: bool = Field(False, description="Create as draft MR (optional, default: False)")
+    allow_collaboration: bool = Field(False, description="Allow commits from upstream members (optional, default: False)")
+
+class ListMergeRequestsModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    state: str = Field("opened", description="Filter merge requests by state ('opened', 'closed', 'locked', 'merged', or 'all') (optional, default: 'opened')")
+    target_branch: Optional[str] = Field(None, description="Filter by target branch (optional)")
+    source_branch: Optional[str] = Field(None, description="Filter by source branch (optional)")
+    page: int = Field(1, description="Page number (optional, default: 1)")
+    per_page: int = Field(20, description="Number of items per page (optional, default: 20)")
+
+# Project models
+class GetProjectDetailsModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+
+# Commit models
+class ListCommitsModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    ref_name: Optional[str] = Field(None, description="Branch/tag name (optional)")
+    path: Optional[str] = Field(None, description="Path to file (optional)")
+    page: int = Field(1, description="Page number (optional, default: 1)")
+    per_page: int = Field(20, description="Number of items per page (optional, default: 20)")
+
+class GetCommitDetailsModel(BaseModel):
+    project_id: str = Field(description="Project ID or URL-encoded path")
+    sha: str = Field(description="Commit hash")
+
+# User models
+class GetUserInfoModel(BaseModel):
+    user_id: Optional[str] = Field(None, description="User ID or username (optional, defaults to current user)")
+
 # Tool implementations
 
 @mcp.tool()
@@ -100,15 +216,25 @@ async def create_or_update_file(
         previous_path: Path of the file to move/rename (optional)
     
     Returns:
-        File content and commit details
+        Created/updated file details
     """
-    endpoint = f"projects/{project_id}/repository/files/{urllib.parse.quote(file_path, safe='')}"
+    # Validate inputs with Pydantic
+    model = CreateOrUpdateFileModel(
+        project_id=project_id,
+        file_path=file_path,
+        content=content,
+        commit_message=commit_message,
+        branch=branch,
+        previous_path=previous_path
+    )
+    
+    endpoint = f"projects/{model.project_id}/repository/files/{urllib.parse.quote(model.file_path, safe='')}"
     
     # Check if the file exists
     try:
         await make_gitlab_request(
             "GET",
-            f"{endpoint}?ref={branch}",
+            f"{endpoint}?ref={model.branch}",
         )
         # File exists, update it
         method = "PUT"
@@ -117,13 +243,13 @@ async def create_or_update_file(
         method = "POST"
     
     data = {
-        "branch": branch,
-        "content": content,
-        "commit_message": commit_message,
+        "branch": model.branch,
+        "content": model.content,
+        "commit_message": model.commit_message,
     }
     
-    if previous_path:
-        data["previous_path"] = previous_path
+    if model.previous_path:
+        data["previous_path"] = model.previous_path
     
     result = await make_gitlab_request(
         method,
@@ -137,7 +263,7 @@ async def create_or_update_file(
 async def push_files(
     project_id: str,
     branch: str,
-    files: List[Dict[str, str]],
+    files: List[Dict[str, Any]],
     commit_message: str
 ) -> str:
     """Push multiple files in a single commit.
@@ -151,20 +277,40 @@ async def push_files(
     Returns:
         Updated branch reference
     """
-    endpoint = f"projects/{project_id}/repository/commits"
+    # Convert the files list to FileInfo objects
+    file_info_list = []
+    for file_data in files:
+        update = file_data.get("update", False)
+        if isinstance(update, str):
+            update = update.lower() == "true"
+        file_info_list.append(FileInfo(
+            file_path=file_data["file_path"],
+            content=file_data["content"],
+            update=update
+        ))
+    
+    # Validate inputs with Pydantic
+    model = PushFilesModel(
+        project_id=project_id,
+        branch=branch,
+        files=file_info_list,
+        commit_message=commit_message
+    )
+    
+    endpoint = f"projects/{model.project_id}/repository/commits"
     
     # Format the actions for the commit
     actions = []
-    for file in files:
+    for file in model.files:
         actions.append({
-            "action": "update" if file.get("update", False) else "create",
-            "file_path": file["file_path"],
-            "content": file["content"]
+            "action": "update" if file.update else "create",
+            "file_path": file.file_path,
+            "content": file.content
         })
     
     data = {
-        "branch": branch,
-        "commit_message": commit_message,
+        "branch": model.branch,
+        "commit_message": model.commit_message,
         "actions": actions
     }
     
@@ -179,8 +325,8 @@ async def push_files(
 @mcp.tool()
 async def search_repositories(
     search: str,
-    page: Optional[int] = 1,
-    per_page: Optional[int] = 20
+    page: int = 1,
+    per_page: int = 20
 ) -> str:
     """Search for GitLab projects.
     
@@ -190,14 +336,21 @@ async def search_repositories(
         per_page: Results per page (optional, default: 20)
     
     Returns:
-        Project search results
+        List of matching projects
     """
+    # Validate inputs with Pydantic
+    model = SearchRepositoriesModel(
+        search=search,
+        page=page,
+        per_page=per_page
+    )
+    
     endpoint = "projects"
     
     params = {
-        "search": search,
-        "page": page,
-        "per_page": per_page,
+        "search": model.search,
+        "page": str(model.page),
+        "per_page": str(model.per_page),
         "order_by": "id",
         "sort": "desc"
     }
@@ -214,8 +367,8 @@ async def search_repositories(
 async def create_repository(
     name: str,
     description: Optional[str] = None,
-    visibility: Optional[str] = "private",
-    initialize_with_readme: Optional[bool] = False
+    visibility: str = "private",
+    initialize_with_readme: bool = False
 ) -> str:
     """Create a new GitLab project.
     
@@ -228,20 +381,24 @@ async def create_repository(
     Returns:
         Created project details
     """
+    # Validate inputs with Pydantic
+    model = CreateRepositoryModel(
+        name=name,
+        description=description,
+        visibility=visibility,
+        initialize_with_readme=initialize_with_readme
+    )
+    
     endpoint = "projects"
     
-    # Validate visibility
-    if visibility not in ["private", "internal", "public"]:
-        raise ValueError("Visibility must be one of: 'private', 'internal', 'public'")
-    
     data = {
-        "name": name,
-        "visibility": visibility,
-        "initialize_with_readme": initialize_with_readme
+        "name": model.name,
+        "visibility": model.visibility,
+        "initialize_with_readme": model.initialize_with_readme
     }
     
-    if description:
-        data["description"] = description
+    if model.description:
+        data["description"] = model.description
     
     result = await make_gitlab_request(
         "POST",
@@ -265,15 +422,22 @@ async def get_file_contents(
         ref: Branch/tag/commit to get contents from (optional)
     
     Returns:
-        File/directory contents
+        File content or directory listing
     """
+    # Validate inputs with Pydantic
+    model = GetFileContentsModel(
+        project_id=project_id,
+        file_path=file_path,
+        ref=ref
+    )
+    
     params = {}
-    if ref:
-        params["ref"] = ref
+    if model.ref:
+        params["ref"] = model.ref
     
     # Try to get file contents first
     try:
-        endpoint = f"projects/{project_id}/repository/files/{urllib.parse.quote(file_path, safe='')}"
+        endpoint = f"projects/{model.project_id}/repository/files/{urllib.parse.quote(model.file_path, safe='')}"
         result = await make_gitlab_request(
             "GET",
             endpoint,
@@ -282,7 +446,6 @@ async def get_file_contents(
         
         # Get raw file content
         if "content" in result:
-            import base64
             try:
                 # If it's base64 encoded, decode it
                 content = base64.b64decode(result["content"]).decode("utf-8")
@@ -297,8 +460,8 @@ async def get_file_contents(
         # If not a file, try to get directory contents
         try:
             # Remove leading slash if present
-            path = file_path.lstrip("/")
-            endpoint = f"projects/{project_id}/repository/tree"
+            path = model.file_path.lstrip("/")
+            endpoint = f"projects/{model.project_id}/repository/tree"
             path_params = params.copy()
             path_params["path"] = path
             
@@ -310,7 +473,7 @@ async def get_file_contents(
             return json.dumps(result, indent=2)
         
         except ValueError as e:
-            return f"Error: {str(e)}"
+            return json.dumps({"error": str(e)}, indent=2)
 
 @mcp.tool()
 async def create_issue(
@@ -334,23 +497,35 @@ async def create_issue(
     Returns:
         Created issue details
     """
-    endpoint = f"projects/{project_id}/issues"
+    # Validate inputs with Pydantic
+    model = CreateIssueModel(
+        project_id=project_id,
+        title=title,
+        description=description,
+        assignee_ids=assignee_ids,
+        labels=labels,
+        milestone_id=milestone_id
+    )
+    
+    endpoint = f"projects/{model.project_id}/issues"
     
     data = {
-        "title": title
+        "title": model.title
     }
     
-    if description:
-        data["description"] = description
+    if model.description:
+        data["description"] = model.description
         
-    if assignee_ids:
-        data["assignee_ids"] = assignee_ids
+    if model.assignee_ids:
+        # Convert list of IDs to individual parameters for GitLab API
+        for i, assignee_id in enumerate(model.assignee_ids):
+            data[f"assignee_ids[{i}]"] = str(assignee_id)
         
-    if labels:
-        data["labels"] = ",".join(labels)
+    if model.labels:
+        data["labels"] = ",".join(model.labels)
         
-    if milestone_id:
-        data["milestone_id"] = milestone_id
+    if model.milestone_id:
+        data["milestone_id"] = str(model.milestone_id)
     
     result = await make_gitlab_request(
         "POST",
@@ -367,8 +542,8 @@ async def create_merge_request(
     source_branch: str,
     target_branch: str,
     description: Optional[str] = None,
-    draft: Optional[bool] = False,
-    allow_collaboration: Optional[bool] = False
+    draft: bool = False,
+    allow_collaboration: bool = False
 ) -> str:
     """Create a new merge request.
     
@@ -384,19 +559,30 @@ async def create_merge_request(
     Returns:
         Created merge request details
     """
-    endpoint = f"projects/{project_id}/merge_requests"
+    # Validate inputs with Pydantic
+    model = CreateMergeRequestModel(
+        project_id=project_id,
+        title=title,
+        source_branch=source_branch,
+        target_branch=target_branch,
+        description=description,
+        draft=draft,
+        allow_collaboration=allow_collaboration
+    )
+    
+    endpoint = f"projects/{model.project_id}/merge_requests"
     
     data = {
-        "title": title,
-        "source_branch": source_branch,
-        "target_branch": target_branch,
-        "allow_collaboration": allow_collaboration
+        "title": model.title,
+        "source_branch": model.source_branch,
+        "target_branch": model.target_branch,
+        "allow_collaboration": model.allow_collaboration
     }
     
-    if description:
-        data["description"] = description
+    if model.description:
+        data["description"] = model.description
         
-    if draft:
+    if model.draft:
         data["draft"] = True
     
     result = await make_gitlab_request(
@@ -412,7 +598,7 @@ async def fork_repository(
     project_id: str,
     namespace: Optional[str] = None
 ) -> str:
-    """Fork a project.
+    """Fork a project to the current user's namespace or a specified namespace.
     
     Args:
         project_id: Project ID or URL-encoded path
@@ -421,11 +607,17 @@ async def fork_repository(
     Returns:
         Forked project details
     """
-    endpoint = f"projects/{project_id}/fork"
+    # Validate inputs with Pydantic
+    model = ForkRepositoryModel(
+        project_id=project_id,
+        namespace=namespace
+    )
+    
+    endpoint = f"projects/{model.project_id}/fork"
     
     data = {}
-    if namespace:
-        data["namespace"] = namespace
+    if model.namespace:
+        data["namespace"] = model.namespace
     
     result = await make_gitlab_request(
         "POST",
@@ -439,9 +631,9 @@ async def fork_repository(
 async def create_branch(
     project_id: str,
     branch: str,
-    ref: Optional[str] = "main"
+    ref: str = "main"
 ) -> str:
-    """Create a new branch.
+    """Create a new branch in a project.
     
     Args:
         project_id: Project ID or URL-encoded path
@@ -449,13 +641,20 @@ async def create_branch(
         ref: Source branch/commit for new branch (optional, default: 'main')
     
     Returns:
-        Created branch reference
+        Created branch details
     """
-    endpoint = f"projects/{project_id}/repository/branches"
+    # Validate inputs with Pydantic
+    model = CreateBranchModel(
+        project_id=project_id,
+        branch=branch,
+        ref=ref
+    )
+    
+    endpoint = f"projects/{model.project_id}/repository/branches"
     
     data = {
-        "branch": branch,
-        "ref": ref
+        "branch": model.branch,
+        "ref": model.ref
     }
     
     result = await make_gitlab_request(
@@ -465,8 +664,6 @@ async def create_branch(
     )
     
     return json.dumps(result, indent=2)
-
-# Additional tools beyond the requested ones
 
 @mcp.tool()
 async def list_branches(
@@ -482,11 +679,17 @@ async def list_branches(
     Returns:
         List of branches
     """
-    endpoint = f"projects/{project_id}/repository/branches"
+    # Validate inputs with Pydantic
+    model = ListBranchesModel(
+        project_id=project_id,
+        search=search
+    )
+    
+    endpoint = f"projects/{model.project_id}/repository/branches"
     
     params = {}
-    if search:
-        params["search"] = search
+    if model.search:
+        params["search"] = model.search
     
     result = await make_gitlab_request(
         "GET",
@@ -499,12 +702,12 @@ async def list_branches(
 @mcp.tool()
 async def list_issues(
     project_id: str,
-    state: Optional[str] = "opened",
+    state: str = "opened",
     labels: Optional[List[str]] = None,
     milestone: Optional[str] = None,
     search: Optional[str] = None,
-    page: Optional[int] = 1,
-    per_page: Optional[int] = 20
+    page: int = 1,
+    per_page: int = 20
 ) -> str:
     """List issues in a project.
     
@@ -520,22 +723,33 @@ async def list_issues(
     Returns:
         List of issues
     """
-    endpoint = f"projects/{project_id}/issues"
+    # Validate inputs with Pydantic
+    model = ListIssuesModel(
+        project_id=project_id,
+        state=state,
+        labels=labels,
+        milestone=milestone,
+        search=search,
+        page=page,
+        per_page=per_page
+    )
+    
+    endpoint = f"projects/{model.project_id}/issues"
     
     params = {
-        "state": state,
-        "page": page,
-        "per_page": per_page
+        "state": model.state,
+        "page": str(model.page),
+        "per_page": str(model.per_page)
     }
     
-    if labels:
-        params["labels"] = ",".join(labels)
+    if model.labels:
+        params["labels"] = ",".join(model.labels)
         
-    if milestone:
-        params["milestone"] = milestone
+    if model.milestone:
+        params["milestone"] = model.milestone
         
-    if search:
-        params["search"] = search
+    if model.search:
+        params["search"] = model.search
     
     result = await make_gitlab_request(
         "GET",
@@ -557,7 +771,12 @@ async def get_project_details(
     Returns:
         Project details
     """
-    endpoint = f"projects/{project_id}"
+    # Validate inputs with Pydantic
+    model = GetProjectDetailsModel(
+        project_id=project_id
+    )
+    
+    endpoint = f"projects/{model.project_id}"
     
     result = await make_gitlab_request(
         "GET",
@@ -571,8 +790,8 @@ async def list_commits(
     project_id: str,
     ref_name: Optional[str] = None,
     path: Optional[str] = None,
-    page: Optional[int] = 1,
-    per_page: Optional[int] = 20
+    page: int = 1,
+    per_page: int = 20
 ) -> str:
     """List commits in a project.
     
@@ -586,18 +805,27 @@ async def list_commits(
     Returns:
         List of commits
     """
-    endpoint = f"projects/{project_id}/repository/commits"
+    # Validate inputs with Pydantic
+    model = ListCommitsModel(
+        project_id=project_id,
+        ref_name=ref_name,
+        path=path,
+        page=page,
+        per_page=per_page
+    )
+    
+    endpoint = f"projects/{model.project_id}/repository/commits"
     
     params = {
-        "page": page,
-        "per_page": per_page
+        "page": str(model.page),
+        "per_page": str(model.per_page)
     }
     
-    if ref_name:
-        params["ref_name"] = ref_name
+    if model.ref_name:
+        params["ref_name"] = model.ref_name
         
-    if path:
-        params["path"] = path
+    if model.path:
+        params["path"] = model.path
     
     result = await make_gitlab_request(
         "GET",
@@ -621,7 +849,13 @@ async def get_commit_details(
     Returns:
         Commit details
     """
-    endpoint = f"projects/{project_id}/repository/commits/{sha}"
+    # Validate inputs with Pydantic
+    model = GetCommitDetailsModel(
+        project_id=project_id,
+        sha=sha
+    )
+    
+    endpoint = f"projects/{model.project_id}/repository/commits/{model.sha}"
     
     result = await make_gitlab_request(
         "GET",
@@ -652,19 +886,29 @@ async def list_merge_requests(
     Returns:
         List of merge requests
     """
-    endpoint = f"projects/{project_id}/merge_requests"
+    # Validate inputs with Pydantic
+    model = ListMergeRequestsModel(
+        project_id=project_id,
+        state=state,
+        target_branch=target_branch,
+        source_branch=source_branch,
+        page=page,
+        per_page=per_page
+    )
+    
+    endpoint = f"projects/{model.project_id}/merge_requests"
     
     params = {
-        "state": state,
-        "page": page,
-        "per_page": per_page
+        "state": model.state,
+        "page": str(model.page),
+        "per_page": str(model.per_page)
     }
     
-    if target_branch:
-        params["target_branch"] = target_branch
+    if model.target_branch:
+        params["target_branch"] = model.target_branch
         
-    if source_branch:
-        params["source_branch"] = source_branch
+    if model.source_branch:
+        params["source_branch"] = model.source_branch
     
     result = await make_gitlab_request(
         "GET",
@@ -686,8 +930,13 @@ async def get_user_info(
     Returns:
         User information
     """
-    if user_id:
-        endpoint = f"users/{user_id}"
+    # Validate inputs with Pydantic
+    model = GetUserInfoModel(
+        user_id=user_id
+    )
+    
+    if model.user_id:
+        endpoint = f"users/{model.user_id}"
     else:
         endpoint = "user"
     
@@ -697,6 +946,3 @@ async def get_user_info(
     )
     
     return json.dumps(result, indent=2)
-
-if __name__ == "__main__":
-    mcp.run()

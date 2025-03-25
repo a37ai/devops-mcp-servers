@@ -1,13 +1,93 @@
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Union, cast
 import os
 import json
 import httpx
 from mcp.server.fastmcp import FastMCP, Context
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field
 load_dotenv()
 
 # Initialize the MCP server
 mcp = FastMCP("GitHub")
+
+# Define Pydantic models for input validation
+class SearchRepositoriesInput(BaseModel):
+    query: str
+    page: int = 1
+    perPage: int = 30
+
+class CreateRepositoryInput(BaseModel):
+    name: str
+    description: str = ""
+    private: bool = False
+    autoInit: bool = False
+
+class GetFileContentsInput(BaseModel):
+    owner: str
+    repo: str
+    path: str
+    branch: Optional[str] = None
+
+class CreateOrUpdateFileInput(BaseModel):
+    owner: str
+    repo: str
+    path: str
+    content: str
+    message: str
+    branch: str
+    sha: Optional[str] = None
+
+class CreateIssueInput(BaseModel):
+    owner: str
+    repo: str
+    title: str
+    body: str = ""
+    assignees: Optional[List[str]] = None
+    labels: Optional[List[str]] = None
+    milestone: Optional[int] = None
+
+class ListIssuesInput(BaseModel):
+    owner: str
+    repo: str
+    state: str = "open"
+    labels: Optional[List[str]] = None
+    sort: str = "created"
+    direction: str = "desc"
+    since: Optional[str] = None
+    page: int = 1
+    per_page: int = 30
+
+class CreatePullRequestInput(BaseModel):
+    owner: str
+    repo: str
+    title: str
+    head: str
+    base: str
+    body: str = ""
+    draft: bool = False
+    maintainer_can_modify: bool = True
+
+class GetRepositoryInput(BaseModel):
+    owner: str
+    repo: str
+
+class ForkRepositoryInput(BaseModel):
+    owner: str
+    repo: str
+    organization: Optional[str] = None
+
+class CreateBranchInput(BaseModel):
+    owner: str
+    repo: str
+    branch: str
+    from_branch: Optional[str] = None
+
+class SearchCodeInput(BaseModel):
+    q: str
+    sort: str = "indexed"
+    order: str = "desc"
+    per_page: int = 30
+    page: int = 1
 
 # Constants and configuration
 GITHUB_API_BASE = "https://api.github.com"
@@ -22,8 +102,8 @@ if not GITHUB_TOKEN:
 async def github_request(
     method: str, 
     endpoint: str, 
-    data: Dict[str, Any] = None, 
-    params: Dict[str, Any] = None
+    data: Optional[Dict[str, Any]] = None, 
+    params: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
     """Make a request to the GitHub API with proper authentication and error handling."""
     headers = {
@@ -77,10 +157,13 @@ async def search_repositories(query: str, page: int = 1, perPage: int = 30) -> s
     Returns:
         Formatted search results with repository details
     """
+    # Validate inputs with Pydantic
+    input_data = SearchRepositoriesInput(query=query, page=page, perPage=perPage)
+    
     params = {
-        "q": query,
-        "page": page,
-        "per_page": min(perPage, 100)  # Enforcing GitHub API limits
+        "q": input_data.query,
+        "page": input_data.page,
+        "per_page": min(input_data.perPage, 100)  # Enforcing GitHub API limits
     }
     
     result = await github_request("GET", "/search/repositories", params=params)
@@ -92,9 +175,9 @@ async def search_repositories(query: str, page: int = 1, perPage: int = 30) -> s
     items = result.get("items", [])
     
     if not items:
-        return f"No repositories found matching '{query}'."
+        return f"No repositories found matching '{input_data.query}'."
     
-    response = [f"Found {total_count} repositories matching '{query}'. Showing page {page}:"]
+    response = [f"Found {total_count} repositories matching '{input_data.query}'. Showing page {input_data.page}:"]
     
     for repo in items:
         description = repo.get("description", "No description")
@@ -124,14 +207,22 @@ async def create_repository(
     Returns:
         Details of the created repository
     """
+    # Validate inputs with Pydantic
+    input_data = CreateRepositoryInput(
+        name=name,
+        description=description,
+        private=private,
+        autoInit=autoInit
+    )
+    
     if not GITHUB_TOKEN:
         return "Error: GitHub token required to create repositories."
     
     data = {
-        "name": name,
-        "description": description,
-        "private": private,
-        "auto_init": autoInit
+        "name": input_data.name,
+        "description": input_data.description,
+        "private": input_data.private,
+        "auto_init": input_data.autoInit
     }
     
     result = await github_request("POST", "/user/repos", data=data)
@@ -141,10 +232,10 @@ async def create_repository(
     
     return f"""
 Repository created successfully!
-Name: {result.get('full_name', name)}
+Name: {result.get('full_name', input_data.name)}
 URL: {result.get('html_url', 'N/A')}
-Description: {result.get('description', description)}
-Private: {result.get('private', private)}
+Description: {result.get('description', input_data.description)}
+Private: {result.get('private', input_data.private)}
     """
 
 @mcp.tool()
@@ -160,10 +251,13 @@ async def get_file_contents(owner: str, repo: str, path: str, branch: str = None
     Returns:
         File content or directory listing
     """
-    endpoint = f"/repos/{owner}/{repo}/contents/{path}"
+    # Validate inputs with Pydantic
+    input_data = GetFileContentsInput(owner=owner, repo=repo, path=path, branch=branch)
+    
+    endpoint = f"/repos/{input_data.owner}/{input_data.repo}/contents/{input_data.path}"
     params = {}
-    if branch:
-        params["ref"] = branch
+    if input_data.branch:
+        params["ref"] = input_data.branch
     
     result = await github_request("GET", endpoint, params=params)
     
@@ -172,10 +266,13 @@ async def get_file_contents(owner: str, repo: str, path: str, branch: str = None
     
     # If result is a list, it's a directory
     if isinstance(result, list):
-        response = [f"Directory listing for `{path}` in {owner}/{repo}:"]
+        response = [f"Directory listing for `{input_data.path}` in {input_data.owner}/{input_data.repo}:"]
         for item in result:
-            item_type = "📁 " if item.get("type") == "dir" else "📄 "
-            response.append(f"{item_type}{item.get('name', 'Unknown')} - {item.get('size', 0)} bytes")
+            if isinstance(item, dict):
+                item_type = "📁 " if item.get("type") == "dir" else "📄 "
+                response.append(f"{item_type}{item.get('name', 'Unknown')} - {item.get('size', 0)} bytes")
+            else:
+                response.append(f"📄 {item}")
         return "\n".join(response)
     
     # It's a file
@@ -186,11 +283,11 @@ async def get_file_contents(owner: str, repo: str, path: str, branch: str = None
         import base64
         try:
             decoded_content = base64.b64decode(content).decode('utf-8')
-            return f"Contents of `{path}` in {owner}/{repo}:\n\n```\n{decoded_content}\n```"
+            return f"Contents of `{input_data.path}` in {input_data.owner}/{input_data.repo}:\n\n```\n{decoded_content}\n```"
         except:
-            return f"Could not decode content of `{path}`. It may be a binary file."
+            return f"Could not decode content of `{input_data.path}`. It may be a binary file."
     
-    return f"Contents of `{path}` in {owner}/{repo} (not in base64 format):\n{content}"
+    return f"Contents of `{input_data.path}` in {input_data.owner}/{input_data.repo} (not in base64 format):\n{content}"
 
 @mcp.tool()
 async def create_or_update_file(
@@ -216,38 +313,49 @@ async def create_or_update_file(
     Returns:
         Confirmation message and commit details
     """
+    # Validate inputs with Pydantic
+    input_data = CreateOrUpdateFileInput(
+        owner=owner,
+        repo=repo,
+        path=path,
+        content=content,
+        message=message,
+        branch=branch,
+        sha=sha
+    )
+    
     if not GITHUB_TOKEN:
         return "Error: GitHub token required to modify files."
     
     import base64
-    encoded_content = base64.b64encode(content.encode()).decode()
+    encoded_content = base64.b64encode(input_data.content.encode()).decode()
     
     data = {
-        "message": message,
+        "message": input_data.message,
         "content": encoded_content,
-        "branch": branch
+        "branch": input_data.branch
     }
     
-    if sha:
-        data["sha"] = sha
+    if input_data.sha:
+        data["sha"] = input_data.sha
     
-    endpoint = f"/repos/{owner}/{repo}/contents/{path}"
+    endpoint = f"/repos/{input_data.owner}/{input_data.repo}/contents/{input_data.path}"
     result = await github_request("PUT", endpoint, data=data)
     
     if "error" in result:
         return f"Error creating/updating file: {result['error']}"
     
-    action = "updated" if sha else "created"
+    action = "updated" if input_data.sha else "created"
     
     commit = result.get("commit", {})
     commit_url = commit.get("html_url", "Unknown")
     
     return f"""
 File {action} successfully!
-Path: {path}
-Repository: {owner}/{repo}
-Branch: {branch}
-Commit message: {message}
+Path: {input_data.path}
+Repository: {input_data.owner}/{input_data.repo}
+Branch: {input_data.branch}
+Commit message: {input_data.message}
 Commit URL: {commit_url}
     """
 
@@ -275,24 +383,39 @@ async def create_issue(
     Returns:
         Issue creation details
     """
+    # Validate inputs with Pydantic
+    input_data = CreateIssueInput(
+        owner=owner,
+        repo=repo,
+        title=title,
+        body=body,
+        assignees=assignees,
+        labels=labels,
+        milestone=milestone
+    )
+    
     if not GITHUB_TOKEN:
         return "Error: GitHub token required to create issues."
     
     data = {
-        "title": title,
-        "body": body
+        "title": input_data.title,
+        "body": input_data.body
     }
     
-    if assignees:
-        data["assignees"] = assignees
+    # GitHub API expects these fields as JSON arrays, not strings
+    if input_data.assignees:
+        # Cast to Any to avoid type errors with Dict[str, Any]
+        data["assignees"] = cast(Any, input_data.assignees)
     
-    if labels:
-        data["labels"] = labels
+    if input_data.labels:
+        # Cast to Any to avoid type errors with Dict[str, Any]
+        data["labels"] = cast(Any, input_data.labels)
     
-    if milestone:
-        data["milestone"] = milestone
+    if input_data.milestone:
+        # Convert milestone to string if provided
+        data["milestone"] = str(input_data.milestone)
     
-    endpoint = f"/repos/{owner}/{repo}/issues"
+    endpoint = f"/repos/{input_data.owner}/{input_data.repo}/issues"
     result = await github_request("POST", endpoint, data=data)
     
     if "error" in result:
@@ -300,7 +423,7 @@ async def create_issue(
     
     return f"""
 Issue created successfully!
-Title: {result.get('title', title)}
+Title: {result.get('title', input_data.title)}
 Number: #{result.get('number', 'Unknown')}
 URL: {result.get('html_url', 'N/A')}
     """
@@ -333,32 +456,49 @@ async def list_issues(
     Returns:
         Formatted list of issues
     """
+    # Validate inputs with Pydantic
+    input_data = ListIssuesInput(
+        owner=owner,
+        repo=repo,
+        state=state,
+        labels=labels,
+        sort=sort,
+        direction=direction,
+        since=since,
+        page=page,
+        per_page=per_page
+    )
+    
     params = {
-        "state": state,
-        "sort": sort,
-        "direction": direction,
-        "page": page,
-        "per_page": min(per_page, 100)  # Enforce GitHub API limits
+        "state": input_data.state,
+        "sort": input_data.sort,
+        "direction": input_data.direction,
+        "page": input_data.page,
+        "per_page": min(input_data.per_page, 100)  # Enforce GitHub API limits
     }
     
-    if labels:
-        params["labels"] = ",".join(labels)
+    if input_data.labels:
+        params["labels"] = ",".join(input_data.labels)
     
-    if since:
-        params["since"] = since
+    if input_data.since:
+        params["since"] = input_data.since
     
-    endpoint = f"/repos/{owner}/{repo}/issues"
+    endpoint = f"/repos/{input_data.owner}/{input_data.repo}/issues"
     result = await github_request("GET", endpoint, params=params)
     
     if "error" in result:
         return f"Error listing issues: {result['error']}"
     
     if not result:
-        return f"No issues found matching the criteria in {owner}/{repo}."
+        return f"No issues found matching the criteria in {input_data.owner}/{input_data.repo}."
     
-    response = [f"Issues for {owner}/{repo} (state: {state}, page: {page}):"]
+    response = [f"Issues for {input_data.owner}/{input_data.repo} (state: {input_data.state}, page: {input_data.page}):"]
     
     for issue in result:
+        if not isinstance(issue, dict):
+            response.append(f"\n## Issue: {issue}")
+            continue
+            
         response.append(f"\n## #{issue.get('number', 'Unknown')} - {issue.get('title', 'Untitled')}")
         response.append(f"State: {issue.get('state', 'Unknown')}")
         response.append(f"Created: {issue.get('created_at', 'Unknown')}")
@@ -393,28 +533,40 @@ async def create_pull_request(
         owner: Repository owner
         repo: Repository name
         title: PR title
-        body: PR description
         head: Branch containing changes
         base: Branch to merge into
+        body: PR description
         draft: Create as draft PR
         maintainer_can_modify: Allow maintainer edits
     
     Returns:
         Pull request creation details
     """
+    # Validate inputs with Pydantic
+    input_data = CreatePullRequestInput(
+        owner=owner,
+        repo=repo,
+        title=title,
+        head=head,
+        base=base,
+        body=body,
+        draft=draft,
+        maintainer_can_modify=maintainer_can_modify
+    )
+    
     if not GITHUB_TOKEN:
         return "Error: GitHub token required to create pull requests."
     
     data = {
-        "title": title,
-        "head": head,
-        "base": base,
-        "body": body,
-        "draft": draft,
-        "maintainer_can_modify": maintainer_can_modify
+        "title": input_data.title,
+        "head": input_data.head,
+        "base": input_data.base,
+        "body": input_data.body,
+        "draft": input_data.draft,
+        "maintainer_can_modify": input_data.maintainer_can_modify
     }
     
-    endpoint = f"/repos/{owner}/{repo}/pulls"
+    endpoint = f"/repos/{input_data.owner}/{input_data.repo}/pulls"
     result = await github_request("POST", endpoint, data=data)
     
     if "error" in result:
@@ -422,11 +574,11 @@ async def create_pull_request(
     
     return f"""
 Pull request created successfully!
-Title: {result.get('title', title)}
+Title: {result.get('title', input_data.title)}
 Number: #{result.get('number', 'Unknown')}
 URL: {result.get('html_url', 'N/A')}
 Status: {result.get('state', 'Unknown')}
-Draft: {'Yes' if result.get('draft', draft) else 'No'}
+Draft: {'Yes' if result.get('draft', input_data.draft) else 'No'}
     """
 
 @mcp.tool()
@@ -440,7 +592,10 @@ async def get_repository(owner: str, repo: str) -> str:
     Returns:
         Formatted repository details
     """
-    endpoint = f"/repos/{owner}/{repo}"
+    # Validate inputs with Pydantic
+    input_data = GetRepositoryInput(owner=owner, repo=repo)
+    
+    endpoint = f"/repos/{input_data.owner}/{input_data.repo}"
     result = await github_request("GET", endpoint)
     
     if "error" in result:
@@ -450,7 +605,7 @@ async def get_repository(owner: str, repo: str) -> str:
     topics_str = ", ".join(topics) if topics else "None"
     
     return f"""
-# Repository Information: {result.get('full_name', f'{owner}/{repo}')}
+# Repository Information: {result.get('full_name', f'{input_data.owner}/{input_data.repo}')}
 
 - Description: {result.get('description', 'No description')}
 - URL: {result.get('html_url', 'N/A')}
@@ -460,7 +615,7 @@ async def get_repository(owner: str, repo: str) -> str:
 - Forks: {result.get('forks_count', 0)}
 - Watchers: {result.get('watchers_count', 0)}
 - Open Issues: {result.get('open_issues_count', 0)}
-- License: {result.get('license', {}).get('name', 'Not specified')}
+- License: {result.get('license', {}).get('name', 'Not specified') if result.get('license') else 'Not specified'}
 - Private: {'Yes' if result.get('private', False) else 'No'}
 - Created: {result.get('created_at', 'Unknown')}
 - Updated: {result.get('updated_at', 'Unknown')}
@@ -480,14 +635,17 @@ async def fork_repository(owner: str, repo: str, organization: str = None) -> st
     Returns:
         Forked repository details
     """
+    # Validate inputs with Pydantic
+    input_data = ForkRepositoryInput(owner=owner, repo=repo, organization=organization)
+    
     if not GITHUB_TOKEN:
         return "Error: GitHub token required to fork repositories."
     
-    endpoint = f"/repos/{owner}/{repo}/forks"
+    endpoint = f"/repos/{input_data.owner}/{input_data.repo}/forks"
     data = {}
     
-    if organization:
-        data["organization"] = organization
+    if input_data.organization:
+        data["organization"] = input_data.organization
     
     result = await github_request("POST", endpoint, data=data)
     
@@ -519,18 +677,28 @@ async def create_branch(
     Returns:
         Branch creation confirmation
     """
+    # Validate inputs with Pydantic
+    input_data = CreateBranchInput(
+        owner=owner,
+        repo=repo,
+        branch=branch,
+        from_branch=from_branch
+    )
+    
     if not GITHUB_TOKEN:
         return "Error: GitHub token required to create branches."
     
     # First, get the source branch ref if not specified
-    if not from_branch:
-        repo_info = await github_request("GET", f"/repos/{owner}/{repo}")
+    if not input_data.from_branch:
+        repo_info = await github_request("GET", f"/repos/{input_data.owner}/{input_data.repo}")
         if "error" in repo_info:
             return f"Error getting repository information: {repo_info['error']}"
         from_branch = repo_info.get("default_branch", "main")
+    else:
+        from_branch = input_data.from_branch
     
     # Get the SHA of the source branch's HEAD
-    ref_result = await github_request("GET", f"/repos/{owner}/{repo}/git/refs/heads/{from_branch}")
+    ref_result = await github_request("GET", f"/repos/{input_data.owner}/{input_data.repo}/git/refs/heads/{from_branch}")
     
     if "error" in ref_result:
         return f"Error getting reference for source branch: {ref_result['error']}"
@@ -541,29 +709,29 @@ async def create_branch(
     
     # Create the new branch
     data = {
-        "ref": f"refs/heads/{branch}",
+        "ref": f"refs/heads/{input_data.branch}",
         "sha": sha
     }
     
-    create_result = await github_request("POST", f"/repos/{owner}/{repo}/git/refs", data=data)
+    create_result = await github_request("POST", f"/repos/{input_data.owner}/{input_data.repo}/git/refs", data=data)
     
     if "error" in create_result:
         return f"Error creating branch: {create_result['error']}"
     
     return f"""
 Branch created successfully!
-Name: {branch}
+Name: {input_data.branch}
 Based on: {from_branch}
-Repository: {owner}/{repo}
+Repository: {input_data.owner}/{input_data.repo}
 SHA: {sha[:7]}
     """
 
 @mcp.tool()
 async def search_code(
-    q: str, 
-    sort: str = "indexed", 
-    order: str = "desc", 
-    per_page: int = 30, 
+    q: str,
+    sort: str = "indexed",
+    order: str = "desc",
+    per_page: int = 30,
     page: int = 1
 ) -> str:
     """Search for code across GitHub repositories.
@@ -578,12 +746,21 @@ async def search_code(
     Returns:
         Formatted code search results
     """
+    # Validate inputs with Pydantic
+    input_data = SearchCodeInput(
+        q=q,
+        sort=sort,
+        order=order,
+        per_page=per_page,
+        page=page
+    )
+    
     params = {
-        "q": q,
-        "sort": sort,
-        "order": order,
-        "per_page": min(per_page, 100),
-        "page": page
+        "q": input_data.q,
+        "sort": input_data.sort,
+        "order": input_data.order,
+        "per_page": min(input_data.per_page, 100),
+        "page": input_data.page
     }
     
     result = await github_request("GET", "/search/code", params=params)
@@ -595,9 +772,9 @@ async def search_code(
     items = result.get("items", [])
     
     if not items:
-        return f"No code found matching '{q}'."
+        return f"No code found matching '{input_data.q}'."
     
-    response = [f"Found {total_count} code results matching '{q}'. Showing page {page}:"]
+    response = [f"Found {total_count} code results matching '{input_data.q}'. Showing page {input_data.page}:"]
     
     for item in items:
         repo = item.get("repository", {})
