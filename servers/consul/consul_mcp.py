@@ -9,11 +9,192 @@ import json
 import urllib.parse
 import asyncio
 import functools
-from typing import Dict, List, Optional, Union, Any
+import base64
+from typing import Dict, List, Optional, Union, Any, Type, Literal
 from consul import Consul
 from consul.base import ACLPermissionDenied  # Import directly from consul.base
 from mcp.server.fastmcp import FastMCP
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, field_validator, model_validator, RootModel
+
+# Common Models
+class DatacenterParam(BaseModel):
+    """Common parameter for datacenter specification."""
+    dc: Optional[str] = Field(default=None, description="Datacenter to query")
+
+class ErrorResponse(BaseModel):
+    """Common error response model."""
+    error: str
+    success: Optional[bool] = False
+
+class SuccessResponse(BaseModel):
+    """Common success response model."""
+    success: bool
+    error: Optional[str] = None
+
+# Datacenter Models
+class DatacenterList(BaseModel):
+    """List of datacenters."""
+    datacenters: List[str]
+
+# Node Models
+class NodeParams(DatacenterParam):
+    """Parameters for node operations."""
+    near: Optional[str] = Field(default=None, description="Sort by RTT from this node")
+    filter: Optional[str] = Field(default=None, description="Filter expression")
+
+class NodeTaggedAddresses(BaseModel):
+    """Tagged addresses for a node."""
+    lan: Optional[str] = None
+    lan_ipv4: Optional[str] = None
+    wan: Optional[str] = None
+    wan_ipv4: Optional[str] = None
+
+class NodeMeta(BaseModel):
+    """Metadata for a node."""
+    consul_network_segment: Optional[str] = Field(default=None, alias="consul-network-segment")
+    consul_version: Optional[str] = Field(default=None, alias="consul-version")
+
+class Node(BaseModel):
+    """Node information."""
+    ID: str
+    Node: str
+    Address: str
+    Datacenter: Optional[str] = None
+    TaggedAddresses: Optional[NodeTaggedAddresses] = None
+    Meta: Optional[NodeMeta] = None
+    CreateIndex: Optional[int] = None
+    ModifyIndex: Optional[int] = None
+
+class NodeList(BaseModel):
+    """List of nodes."""
+    nodes: List[Node]
+
+# Service Models
+class ServiceParams(DatacenterParam):
+    """Parameters for service operations."""
+    pass
+
+class ServiceTagMap(RootModel[Dict[str, List[str]]]):
+    """Map of service name to tags."""
+    model_config = {
+        "arbitrary_types_allowed": True
+    }
+
+# Service Registration Models
+class ServiceRegistrationParams(DatacenterParam):
+    """Parameters for service registration."""
+    name: str = Field(description="Service name")
+    id: Optional[str] = Field(default=None, description="Service ID (defaults to name)")
+    address: Optional[str] = Field(default=None, description="Service address")
+    port: Optional[int] = Field(default=None, description="Service port")
+    tags: Optional[str] = Field(default=None, description="Comma-separated list of tags")
+    meta: Optional[str] = Field(default=None, description="JSON string with metadata key-value pairs")
+    node: Optional[str] = Field(default=None, description="Node to register service on")
+
+    @field_validator('meta')
+    def validate_meta_json(cls, v):
+        """Validate that meta is valid JSON if provided."""
+        if v is not None:
+            import json
+            try:
+                json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in meta parameter")
+        return v
+
+# Service Deregistration Models
+class ServiceDeregistrationParams(DatacenterParam):
+    """Parameters for service deregistration."""
+    service_id: str = Field(description="ID of the service to deregister")
+    node: str = Field(description="Node the service is registered on")
+
+# Health Check Models
+class HealthServiceParams(DatacenterParam):
+    """Parameters for health service operations."""
+    service: str = Field(description="Service name")
+    passing: bool = Field(default=False, description="If true, only return passing services")
+    near: Optional[str] = Field(default=None, description="Sorts results by round trip time")
+    filter: Optional[str] = Field(default=None, description="Filters results based on expression")
+
+# ACL Token Models
+class ACLTokenParams(BaseModel):
+    """Parameters for ACL token creation."""
+    description: Optional[str] = Field(default=None, description="Human readable description")
+    policies: Optional[str] = Field(default=None, description="Comma-separated policy names")
+    roles: Optional[str] = Field(default=None, description="Comma-separated role names")
+    service_identities: Optional[str] = Field(default=None, description="JSON service identities")
+    expires_after: Optional[str] = Field(default=None, description="Token expiration duration")
+
+    @field_validator('service_identities')
+    def validate_service_identities_json(cls, v):
+        """Validate that service_identities is valid JSON if provided."""
+        if v is not None:
+            import json
+            try:
+                json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in service_identities parameter")
+        return v
+
+# Prepared Query Models
+class PreparedQueryParams(DatacenterParam):
+    """Parameters for executing prepared queries."""
+    query_id: str = Field(description="ID of the prepared query to execute")
+
+# Intention Models
+class IntentionParams(BaseModel):
+    """Parameters for creating service mesh intentions."""
+    source_name: str = Field(description="Source service name")
+    destination_name: str = Field(description="Destination service name")
+    action: Literal["allow", "deny"] = Field(description="Can be 'allow' or 'deny'")
+    description: Optional[str] = Field(default=None, description="Human readable description")
+    meta: Optional[str] = Field(default=None, description="JSON metadata key-value pairs")
+
+    @field_validator('meta')
+    def validate_meta_json(cls, v):
+        """Validate that meta is valid JSON if provided."""
+        if v is not None:
+            import json
+            try:
+                json.loads(v)
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in meta parameter")
+        return v
+
+# KV Models
+class KVGetParams(DatacenterParam):
+    """Parameters for KV get operations."""
+    key: str = Field(description="Key to retrieve")
+    recurse: bool = Field(default=False, description="Get all keys with given prefix")
+    raw: bool = Field(default=False, description="Return raw value")
+
+class KVPutParams(DatacenterParam):
+    """Parameters for KV put operations."""
+    key: str = Field(description="Key to store")
+    value: str = Field(description="Value to store")
+    flags: Optional[int] = Field(default=None, description="Unsigned integer value")
+    cas: Optional[int] = Field(default=None, description="Check-and-set value")
+
+class KVDeleteParams(DatacenterParam):
+    """Parameters for KV delete operations."""
+    key: str = Field(description="Key to delete")
+    recurse: bool = Field(default=False, description="Delete all keys with given prefix")
+
+class KVEntry(BaseModel):
+    """KV store entry."""
+    CreateIndex: int
+    ModifyIndex: int
+    LockIndex: int
+    Key: str
+    Flags: int
+    Value: Optional[str] = None
+    Session: Optional[str] = None
+
+class KVList(BaseModel):
+    """List of KV entries."""
+    entries: List[KVEntry]
+
 
 load_dotenv()
 
@@ -33,11 +214,22 @@ def get_consul_connection_info():
     host = parsed_url.hostname or "localhost"
     port = parsed_url.port or 8500
     
+    # Print connection info for debugging
+    print(f"Consul connection info: {host}:{port}")
+    
     return host, port
 
 # Initialize Consul client
 def get_consul_client():
-    host, port = get_consul_connection_info()
+    # Use the environment variables directly to ensure correct connection
+    if CONSUL_URL:
+        parsed_url = urllib.parse.urlparse(CONSUL_URL)
+        host = parsed_url.hostname
+        port = parsed_url.port or 8500
+    else:
+        host, port = get_consul_connection_info()
+    
+    print(f"Creating Consul client with host={host}, port={port}")
     return Consul(host=host, port=port, token=CONSUL_TOKEN)
 
 # Helper to run synchronous functions in a thread pool
@@ -45,6 +237,11 @@ async def run_sync(func):
     """Run a synchronous function in a thread pool."""
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, func)
+
+# Helper function to handle model to JSON string conversion
+def model_to_json(model: BaseModel) -> str:
+    """Convert a Pydantic model to a JSON string."""
+    return model.model_dump_json(indent=2)
 
 # 1. List Datacenters
 @mcp.tool()
@@ -59,36 +256,53 @@ async def list_datacenters() -> str:
         return client.catalog.datacenters()
     
     datacenters = await run_sync(get_datacenters)
-    return json.dumps(datacenters, indent=2)
+    # Create and return a Pydantic model
+    response = DatacenterList(datacenters=datacenters)
+    return model_to_json(response)
 
 # 2. List Nodes
 @mcp.tool()
-async def list_nodes(dc: Optional[str] = None, near: Optional[str] = None, filter: Optional[str] = None) -> str:
+async def list_nodes(
+    dc: Optional[str] = None,
+    near: Optional[str] = None,
+    filter: Optional[str] = None
+) -> str:
     """
     Returns the nodes registered in a given datacenter.
     """
+    # Create and validate the input parameters model
+    params = NodeParams(dc=dc, near=near, filter=filter)
+    
     client = get_consul_client()
     
-    params = {}
-    if dc:
-        params["dc"] = dc
-    if near:
-        params["near"] = near
+    # Build query parameters
+    query_params = {}
+    if params.dc:
+        query_params["dc"] = params.dc
+    if params.near:
+        query_params["near"] = params.near
     # Note: Remove filter param as the Consul API doesn't support it
-    # If filter is needed, we'll need to do filtering after getting results
     
     def get_nodes():
-        return client.catalog.nodes(**params)
+        return client.catalog.nodes(**query_params)
     
     index, nodes = await run_sync(get_nodes)
     
     # Apply manual filtering if filter parameter was provided
-    if filter:
+    if params.filter:
         # Implement manual filtering logic here if needed
         # For now, just add a warning
-        print(f"Warning: Filter parameter '{filter}' not supported by underlying API, results not filtered")
+        print(f"Warning: Filter parameter '{params.filter}' not supported by underlying API, results not filtered")
     
-    return json.dumps(nodes, indent=2)
+    # Create node models from the response
+    node_list = []
+    for node in nodes:
+        # Convert each node to a Node model
+        node_list.append(Node(**node))
+    
+    # Create and return the node list response
+    response = NodeList(nodes=node_list)
+    return model_to_json(response)
 
 # 3. List Services
 @mcp.tool()
@@ -99,18 +313,24 @@ async def list_services(dc: Optional[str] = None) -> str:
     Args:
         dc: Specifies the datacenter to query
     """
+    # Create and validate the input parameters model
+    params = ServiceParams(dc=dc)
+    
     client = get_consul_client()
     
-    params = {}
-    if dc:
-        params["dc"] = dc
+    query_params = {}
+    if params.dc:
+        query_params["dc"] = params.dc
     
     # Change this to regular function
     def get_services():
-        return client.catalog.services(**params)
+        return client.catalog.services(**query_params)
     
     index, services = await run_sync(get_services)
-    return json.dumps(services, indent=2)
+    
+    # Create response model (services is already a dict of service name -> tags)
+    response = ServiceTagMap(root=services)
+    return model_to_json(response)
 
 # 4. Register Service
 @mcp.tool()
@@ -137,51 +357,61 @@ async def register_service(
         dc: Datacenter to register in
         node: Node to register service on (required)
     """
+    # Create and validate the input parameters model
+    params = ServiceRegistrationParams(
+        name=name, id=id, address=address, port=port,
+        tags=tags, meta=meta, dc=dc, node=node
+    )
+    
     client = get_consul_client()
     
     # Get nodes if node not provided
-    if not node:
+    if not params.node:
         def get_nodes():
             return client.catalog.nodes()
         
         index, nodes = await run_sync(get_nodes)
         if not nodes:
-            return json.dumps({"error": "No nodes found, cannot register service"})
+            error = ErrorResponse(error="No nodes found, cannot register service")
+            return model_to_json(error)
         
         # Use the first node
-        node = nodes[0]['Node']
+        params.node = nodes[0]['Node']
     
     # Build service definition
     service_def = {
-        "node": node,
-        "service": name
+        "node": params.node,
+        "service": params.name
     }
     
-    if id:
-        service_def["service"] = id  # Changed from service_id to service
-    if address:
-        service_def["address"] = address
-    if port:
-        service_def["port"] = port
-    if tags:
-        service_def["tags"] = [tag.strip() for tag in tags.split(",")]
-    if meta:
+    if params.id:
+        service_def["service"] = params.id  # Changed from service_id to service
+    if params.address:
+        service_def["address"] = params.address
+    if params.port:
+        service_def["port"] = params.port
+    if params.tags:
+        service_def["tags"] = [tag.strip() for tag in params.tags.split(",")]
+    if params.meta:
         try:
-            service_def["meta"] = json.loads(meta)
+            service_def["meta"] = json.loads(params.meta)
         except json.JSONDecodeError:
-            return json.dumps({"error": "Invalid JSON in meta parameter"})
+            error = ErrorResponse(error="Invalid JSON in meta parameter")
+            return model_to_json(error)
     
-    if dc:
-        service_def["dc"] = dc
+    if params.dc:
+        service_def["dc"] = params.dc
     
     def do_register():
         return client.catalog.register(**service_def)
     
     try:
         result = await run_sync(do_register)
-        return json.dumps({"success": result}, indent=2)
+        response = SuccessResponse(success=result)
+        return model_to_json(response)
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
+        error = ErrorResponse(error=str(e))
+        return model_to_json(error)
 
 # 5. Deregister Service
 @mcp.tool()
@@ -198,27 +428,33 @@ async def deregister_service(
         node: Node the service is registered on (required)
         dc: Datacenter the service is registered in
     """
-    if not node:
-        return json.dumps({"error": "Node parameter is required for deregistration"})
+    # Create and validate the input parameters model
+    params = ServiceDeregistrationParams(service_id=service_id, node=node, dc=dc)
+    
+    if not params.node:
+        error = ErrorResponse(error="Node parameter is required for deregistration")
+        return model_to_json(error)
     
     client = get_consul_client()
     
     deregister_params = {
-        "node": node,
-        "service_id": service_id
+        "node": params.node,
+        "service_id": params.service_id
     }
     
-    if dc:
-        deregister_params["dc"] = dc
+    if params.dc:
+        deregister_params["dc"] = params.dc
     
     def do_deregister():
         return client.catalog.deregister(**deregister_params)
     
     try:
         result = await run_sync(do_deregister)
-        return json.dumps({"success": result}, indent=2)
+        response = SuccessResponse(success=result)
+        return model_to_json(response)
     except Exception as e:
-        return json.dumps({"success": False, "error": str(e)}, indent=2)
+        error = ErrorResponse(error=str(e))
+        return model_to_json(error)
 
 # 6. Health Checking
 @mcp.tool()
@@ -239,26 +475,32 @@ async def health_service(
         near: Sorts results by round trip time from specified node
         filter: Filters results based on a query expression
     """
+    # Create and validate the input parameters model
+    params = HealthServiceParams(
+        service=service, dc=dc, passing=passing, near=near, filter=filter
+    )
+    
     client = get_consul_client()
     
-    params = {}
-    if dc:
-        params["dc"] = dc
-    if passing:
-        params["passing"] = passing
-    if near:
-        params["near"] = near
+    query_params = {}
+    if params.dc:
+        query_params["dc"] = params.dc
+    if params.passing:
+        query_params["passing"] = params.passing
+    if params.near:
+        query_params["near"] = params.near
     # Remove filter param as it's not supported
     
     def get_health():
-        return client.health.service(service, **params)
+        return client.health.service(params.service, **query_params)
     
     index, health_data = await run_sync(get_health)
     
     # Apply manual filtering if filter parameter was provided
-    if filter:
-        print(f"Warning: Filter parameter '{filter}' not supported by underlying API, results not filtered")
+    if params.filter:
+        print(f"Warning: Filter parameter '{params.filter}' not supported by underlying API, results not filtered")
     
+    # Return the health data as JSON (already has proper structure)
     return json.dumps(health_data, indent=2)
 
 # 7. Create ACL Token
@@ -280,6 +522,15 @@ async def create_acl_token(
         service_identities: JSON string with service identity definitions
         expires_after: Duration after which the token expires (e.g., "24h")
     """
+    # Create and validate the input parameters model
+    params = ACLTokenParams(
+        description=description,
+        policies=policies,
+        roles=roles,
+        service_identities=service_identities,
+        expires_after=expires_after
+    )
+    
     # The Python consul package may not fully support newer ACL APIs
     # Falling back to HTTP request method for this one
     import httpx
@@ -291,23 +542,24 @@ async def create_acl_token(
     
     token_def = {}
     
-    if description:
-        token_def["Description"] = description
+    if params.description:
+        token_def["Description"] = params.description
     
-    if policies:
-        token_def["Policies"] = [{"Name": policy.strip()} for policy in policies.split(",")]
+    if params.policies:
+        token_def["Policies"] = [{"Name": policy.strip()} for policy in params.policies.split(",")]
     
-    if roles:
-        token_def["Roles"] = [{"Name": role.strip()} for role in roles.split(",")]
+    if params.roles:
+        token_def["Roles"] = [{"Name": role.strip()} for role in params.roles.split(",")]
     
-    if service_identities:
+    if params.service_identities:
         try:
-            token_def["ServiceIdentities"] = json.loads(service_identities)
+            token_def["ServiceIdentities"] = json.loads(params.service_identities)
         except json.JSONDecodeError:
-            return json.dumps({"error": "Invalid JSON in service_identities parameter"})
+            error = ErrorResponse(error="Invalid JSON in service_identities parameter")
+            return model_to_json(error)
     
-    if expires_after:
-        token_def["ExpirationTTL"] = expires_after
+    if params.expires_after:
+        token_def["ExpirationTTL"] = params.expires_after
     
     async with httpx.AsyncClient() as http_client:
         response = await http_client.put(
@@ -319,12 +571,13 @@ async def create_acl_token(
             response.raise_for_status()
             return json.dumps(response.json(), indent=2)
         except httpx.HTTPStatusError as e:
-            return json.dumps({
+            error = {
                 "error": True,
                 "status_code": e.response.status_code,
                 "message": str(e),
                 "details": e.response.text
-            }, indent=2)
+            }
+            return json.dumps(error, indent=2)
 
 # 8. Query Prepared Queries
 @mcp.tool()
@@ -339,35 +592,39 @@ async def execute_prepared_query(
         query_id: ID of the prepared query to execute
         dc: Datacenter to query
     """
+    # Create and validate the input parameters model
+    params = PreparedQueryParams(query_id=query_id, dc=dc)
+    
     # The Python consul package may not support prepared queries API
     # Falling back to HTTP request method for this one
     import httpx
     
-    url = f"{CONSUL_URL}/v1/query/{query_id}/execute"
+    url = f"{CONSUL_URL}/v1/query/{params.query_id}/execute"
     headers = {"Content-Type": "application/json"}
     if CONSUL_TOKEN:
         headers["X-Consul-Token"] = CONSUL_TOKEN
     
-    params = {}
-    if dc:
-        params["dc"] = dc
+    query_params = {}
+    if params.dc:
+        query_params["dc"] = params.dc
     
     async with httpx.AsyncClient() as http_client:
         response = await http_client.get(
             url,
-            params=params,
+            params=query_params,
             headers=headers
         )
         try:
             response.raise_for_status()
             return json.dumps(response.json(), indent=2)
         except httpx.HTTPStatusError as e:
-            return json.dumps({
+            error = {
                 "error": True,
                 "status_code": e.response.status_code,
                 "message": str(e),
                 "details": e.response.text
-            }, indent=2)
+            }
+            return json.dumps(error, indent=2)
 
 # 9. Service Mesh Intention
 @mcp.tool()
@@ -388,8 +645,19 @@ async def create_intention(
         description: Human readable description
         meta: JSON string with metadata key-value pairs
     """
+    # Validate action before creating model
     if action not in ["allow", "deny"]:
-        return json.dumps({"error": "Action must be either 'allow' or 'deny'"})
+        error = ErrorResponse(error="Action must be either 'allow' or 'deny'")
+        return model_to_json(error)
+    
+    # Create and validate the input parameters model
+    params = IntentionParams(
+        source_name=source_name,
+        destination_name=destination_name,
+        action=action,
+        description=description,
+        meta=meta
+    )
     
     # The Python consul package may not support connect intentions API
     # Falling back to HTTP request method for this one
@@ -401,19 +669,20 @@ async def create_intention(
         headers["X-Consul-Token"] = CONSUL_TOKEN
     
     intention_def = {
-        "SourceName": source_name,
-        "DestinationName": destination_name,
-        "Action": action
+        "SourceName": params.source_name,
+        "DestinationName": params.destination_name,
+        "Action": params.action
     }
     
-    if description:
-        intention_def["Description"] = description
+    if params.description:
+        intention_def["Description"] = params.description
     
-    if meta:
+    if params.meta:
         try:
-            intention_def["Meta"] = json.loads(meta)
+            intention_def["Meta"] = json.loads(params.meta)
         except json.JSONDecodeError:
-            return json.dumps({"error": "Invalid JSON in meta parameter"})
+            error = ErrorResponse(error="Invalid JSON in meta parameter")
+            return model_to_json(error)
     
     async with httpx.AsyncClient() as http_client:
         response = await http_client.post(
@@ -425,12 +694,13 @@ async def create_intention(
             response.raise_for_status()
             return json.dumps(response.json(), indent=2)
         except httpx.HTTPStatusError as e:
-            return json.dumps({
+            error = {
                 "error": True,
                 "status_code": e.response.status_code,
                 "message": str(e),
                 "details": e.response.text
-            }, indent=2)
+            }
+            return json.dumps(error, indent=2)
 
 # 10. KV Store Operations - Get
 @mcp.tool()
@@ -443,33 +713,56 @@ async def kv_get(
     """
     Retrieves a key-value pair from the KV store.
     """
+    # Create and validate the input parameters model
+    params = KVGetParams(key=key, dc=dc, recurse=recurse, raw=raw)
+    
     client = get_consul_client()
     
-    params = {}
-    if dc:
-        params["dc"] = dc
+    query_params = {}
+    if params.dc:
+        query_params["dc"] = params.dc
     
     def do_get():
-        return client.kv.get(key, recurse=recurse, **params)
+        return client.kv.get(params.key, recurse=params.recurse, **query_params)
     
     try:
         index, value = await run_sync(do_get)
         
         if value is None:
-            return json.dumps({"error": "Key not found"}, indent=2)
+            error = ErrorResponse(error="Key not found")
+            return model_to_json(error)
         
-        if raw:
-            if recurse:
+        if params.raw:
+            if params.recurse:
                 # For recursive operations, just return the full structure
                 return json.dumps(value, indent=2)
             else:
                 # For single key with raw, return just the value
                 return value["Value"].decode("utf-8") if value["Value"] else ""
         else:
+            # Process values for non-recursive responses to decode base64
+            if not params.recurse:
+                if isinstance(value, dict) and "Value" in value and value["Value"]:
+                    try:
+                        # Value is base64 encoded, decode it
+                        value["Value"] = value["Value"].decode("utf-8")
+                    except (UnicodeDecodeError, AttributeError):
+                        # If we can't decode as string, leave it as is
+                        pass
+            else:
+                # Handle recursive results (list of dicts)
+                for item in value:
+                    if "Value" in item and item["Value"]:
+                        try:
+                            item["Value"] = item["Value"].decode("utf-8")
+                        except (UnicodeDecodeError, AttributeError):
+                            pass
+                            
             # Normal get operation
             return json.dumps(value, indent=2)
     except Exception as e:
-        return json.dumps({"error": str(e)}, indent=2)
+        error = ErrorResponse(error=str(e))
+        return model_to_json(error)
 
 # 11. KV Store Operations - Put
 @mcp.tool()
@@ -490,19 +783,22 @@ async def kv_put(
         flags: Unsigned integer value to assign to the key
         cas: Check-and-set value for optimistic locking
     """
+    # Create and validate the input parameters model
+    params = KVPutParams(key=key, value=value, dc=dc, flags=flags, cas=cas)
+    
     client = get_consul_client()
     
-    params = {}
-    if dc:
-        params["dc"] = dc
-    if flags is not None:
-        params["flags"] = flags
-    if cas is not None:
-        params["cas"] = cas
+    query_params = {}
+    if params.dc:
+        query_params["dc"] = params.dc
+    if params.flags is not None:
+        query_params["flags"] = params.flags
+    if params.cas is not None:
+        query_params["cas"] = params.cas
     
     def do_put():
         try:
-            return client.kv.put(key, value, **params)
+            return client.kv.put(params.key, params.value, **query_params)
         except ACLPermissionDenied:  # Fixed: use imported ACLPermissionDenied
             return {"acl_error": "Permission denied: ACL permissions required for KV write operations"}
         except Exception as e:
@@ -513,9 +809,11 @@ async def kv_put(
     # Check if we got an error
     if isinstance(result, dict) and ("acl_error" in result or "error" in result):
         error_msg = result.get("acl_error", result.get("error", "Unknown error"))
-        return json.dumps({"success": False, "error": error_msg}, indent=2)
+        error = ErrorResponse(error=error_msg)
+        return model_to_json(error)
     
-    return json.dumps({"success": result}, indent=2)
+    response = SuccessResponse(success=result)
+    return model_to_json(response)
 
 # 12. KV Store Operations - Delete
 @mcp.tool()
@@ -527,15 +825,18 @@ async def kv_delete(
     """
     Deletes a key-value pair from the KV store.
     """
+    # Create and validate the input parameters model
+    params = KVDeleteParams(key=key, dc=dc, recurse=recurse)
+    
     client = get_consul_client()
     
-    params = {}
-    if dc:
-        params["dc"] = dc
+    query_params = {}
+    if params.dc:
+        query_params["dc"] = params.dc
     
     def do_delete():
         try:
-            return client.kv.delete(key, recurse=recurse, **params)
+            return client.kv.delete(params.key, recurse=params.recurse, **query_params)
         except ACLPermissionDenied:  # Fixed: use imported ACLPermissionDenied
             return {"acl_error": "Permission denied: ACL permissions required for KV write operations"}
         except Exception as e:
@@ -546,9 +847,11 @@ async def kv_delete(
     # Check if we got an error
     if isinstance(result, dict) and ("acl_error" in result or "error" in result):
         error_msg = result.get("acl_error", result.get("error", "Unknown error"))
-        return json.dumps({"success": False, "error": error_msg}, indent=2)
+        error = ErrorResponse(error=error_msg)
+        return model_to_json(error)
     
-    return json.dumps({"success": result}, indent=2)
+    response = SuccessResponse(success=result)
+    return model_to_json(response)
 
 # Main entry point
 if __name__ == "__main__":
