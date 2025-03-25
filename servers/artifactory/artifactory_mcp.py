@@ -2,7 +2,7 @@ import os
 import httpx
 import json
 from typing import Optional, Dict, List, Any, Union
-from dataclasses import dataclass
+from pydantic import BaseModel, Field, ConfigDict
 from mcp.server.fastmcp import FastMCP
 import uuid
 from dotenv import load_dotenv
@@ -15,11 +15,12 @@ JFROG_ACCESS_TOKEN = os.environ.get("JFROG_ACCESS_TOKEN", "")
 # Initialize the MCP server
 mcp = FastMCP("JFrog Artifactory")
 
-@dataclass
-class JFrogClient:
+class JFrogClient(BaseModel):
     """JFrog Artifactory REST API client."""
     base_url: str
     access_token: str
+    
+    model_config = ConfigDict(arbitrary_types_allowed=True)
     
     async def request(
         self,
@@ -84,6 +85,118 @@ class JFrogClient:
             except Exception as e:
                 return {"error": f"Unexpected Error: {str(e)}"}
 
+# Base models for requests and responses
+class ErrorResponse(BaseModel):
+    """Error response model"""
+    error: str
+    
+class SuccessResponse(BaseModel):
+    """Success response model with no data"""
+    status: str = "success"
+
+# Artifact management models
+class ArtifactInfo(BaseModel):
+    """Artifact information model"""
+    repo: str
+    path: str
+    created: Optional[str] = None
+    size: Optional[int] = None
+    modified: Optional[str] = None
+    checksums: Optional[Dict[str, str]] = None
+    
+class DeployArtifactRequest(BaseModel):
+    """Deploy artifact request model"""
+    repo_key: str = Field(..., description="The repository key")
+    item_path: str = Field(..., description="The path within the repository")
+    file_path: str = Field(..., description="The local path to the file to upload")
+
+class DeleteArtifactRequest(BaseModel):
+    """Delete artifact request model"""
+    repo_key: str = Field(..., description="The repository key")
+    item_path: str = Field(..., description="The path within the repository")
+    
+class DeleteRepositoryRequest(BaseModel):
+    """Delete repository request model"""
+    repo_key: str = Field(..., description="The repository key to delete")
+
+class ArtifactInfoRequest(BaseModel):
+    """Artifact info request model"""
+    repo_key: str = Field(..., description="The repository key")
+    item_path: str = Field(..., description="The path within the repository")
+
+class SearchArtifactsRequest(BaseModel):
+    """Search artifacts request model"""
+    name: Optional[str] = Field(None, description="The name pattern to search for")
+    repos: Optional[str] = Field(None, description="The repositories to search in, comma-separated")
+    properties: Optional[str] = Field(None, description="The properties to filter by, format: 'key1=value1;key2=value2'")
+
+class AdvancedSearchRequest(BaseModel):
+    """Advanced search request model"""
+    query: str = Field(..., description="AQL query (e.g., 'items.find({\"repo\": \"my-repo\"})')")
+
+# Repository management models
+class Repository(BaseModel):
+    """Repository model"""
+    key: str = Field(..., description="The repository key")
+    rclass: str = Field(..., description="Repository class (local, remote, virtual, federated)")
+    packageType: str = Field(..., description="Package type (maven, npm, docker, etc.)")
+    
+class RepositoryRequest(BaseModel):
+    """Repository request model"""
+    repo_key: str = Field(..., description="The repository key")
+    repo_type: str = Field(..., description="Repository class (local, remote, virtual, federated)")
+    package_type: str = Field(..., description="Package type (maven, npm, docker, etc.)")
+
+class FederatedRepositoryRequest(BaseModel):
+    """Federated repository request model"""
+    repo_key: str = Field(..., description="The repository key")
+    package_type: str = Field(..., description="Package type (maven, npm, docker, etc.)")
+
+class RepositoryReplicationRequest(BaseModel):
+    """Repository replication request model"""
+    repo_key: str = Field(..., description="The source repository key")
+    target_url: str = Field(..., description="The target repository URL")
+    username: str = Field(..., description="Username for authentication")
+    password: str = Field(..., description="Password for authentication")
+
+# User models
+class UserBase(BaseModel):
+    """Base user model"""
+    name: str = Field(..., description="The username")
+    email: str = Field(..., description="User's email address")
+    admin: bool = Field(False, description="Whether the user should have admin privileges")
+    
+class CreateUserRequest(UserBase):
+    """Create user request model"""
+    password: str = Field(..., description="User's password")
+    
+class UpdateUserRequest(BaseModel):
+    """Update user request model"""
+    username: str = Field(..., description="The username")
+    email: Optional[str] = Field(None, description="New email address")
+    password: Optional[str] = Field(None, description="New password")
+    admin: Optional[bool] = Field(None, description="New admin status")
+
+# Build integration models
+class BuildIntegrationRequest(BaseModel):
+    """Build integration request model"""
+    build_name: str = Field(..., description="The name of the build")
+    build_number: str = Field(..., description="The build number")
+
+# Webhook models
+class WebhookRequest(BaseModel):
+    """Webhook request model"""
+    name: str = Field(..., description="The webhook name")
+    url: str = Field(..., description="The URL to notify")
+    events: List[str] = Field(..., description="List of event types to trigger the webhook")
+
+# Permissions models
+class PermissionsRequest(BaseModel):
+    """Permissions request model"""
+    name: str = Field(..., description="The permission name")
+    repositories: List[str] = Field(..., description="List of repository keys")
+    principals: List[str] = Field(..., description="List of principal names")
+
 # Function to get JFrog client
 def get_jfrog_client() -> JFrogClient:
     """Get a JFrog client instance."""
@@ -92,7 +205,7 @@ def get_jfrog_client() -> JFrogClient:
     if not JFROG_ACCESS_TOKEN:
         raise ValueError("JFROG_ACCESS_TOKEN environment variable is not set")
     
-    return JFrogClient(JFROG_URL, JFROG_ACCESS_TOKEN)
+    return JFrogClient(base_url=JFROG_URL, access_token=JFROG_ACCESS_TOKEN)
 
 # Artifact Management Tools
 @mcp.tool()
@@ -102,7 +215,7 @@ async def deploy_artifact(repo_key: str, item_path: str, file_path: str) -> str:
     Args:
         repo_key: The repository key
         item_path: The path within the repository
-        file_path: The local path to the file to upload
+        file_path: The local file path to upload
     """
     jfrog_client = get_jfrog_client()
     
@@ -113,7 +226,8 @@ async def deploy_artifact(repo_key: str, item_path: str, file_path: str) -> str:
             result = await jfrog_client.request("PUT", endpoint, files=files)
             
         if "error" in result:
-            return f"Failed to deploy artifact: {result['error']}"
+            error_response = ErrorResponse(error=result["error"])
+            return f"Failed to deploy artifact: {error_response.error}"
         return f"Successfully deployed artifact to {repo_key}/{item_path}"
     except FileNotFoundError:
         return f"Error: File {file_path} not found"
@@ -134,9 +248,15 @@ async def get_artifact_info(repo_key: str, item_path: str) -> str:
     result = await jfrog_client.request("GET", endpoint)
     
     if "error" in result:
-        return f"Failed to get artifact info: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to get artifact info: {error_response.error}"
     
-    return json.dumps(result, indent=2)
+    try:
+        artifact_info = ArtifactInfo.model_validate(result)
+        return artifact_info.model_dump_json(indent=2)
+    except Exception:
+        # Fallback to raw JSON if the response doesn't match our model
+        return json.dumps(result, indent=2)
 
 @mcp.tool()
 async def delete_artifact(repo_key: str, item_path: str) -> str:
@@ -152,19 +272,20 @@ async def delete_artifact(repo_key: str, item_path: str) -> str:
     result = await jfrog_client.request("DELETE", endpoint)
     
     if "error" in result:
-        return f"Failed to delete artifact: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to delete artifact: {error_response.error}"
     
+    success_response = SuccessResponse()
     return f"Successfully deleted artifact {repo_key}/{item_path}"
 
 @mcp.tool()
-async def search_artifacts(name: Optional[str] = None, repos: Optional[str] = None, 
-                          properties: Optional[str] = None) -> str:
+async def search_artifacts(name: str = "", repos: str = "", properties: str = "") -> str:
     """Search for artifacts based on name, repository, or properties.
     
     Args:
-        name: The name pattern to search for
-        repos: The repositories to search in, comma-separated
-        properties: The properties to filter by, format: "key1=value1;key2=value2"
+        name: The artifact name pattern (e.g., *.jar)
+        repos: The repository to search in
+        properties: Properties to filter by
     """
     jfrog_client = get_jfrog_client()
     
@@ -180,7 +301,8 @@ async def search_artifacts(name: Optional[str] = None, repos: Optional[str] = No
     result = await jfrog_client.request("GET", endpoint, params=params)
     
     if "error" in result:
-        return f"Failed to search artifacts: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to search artifacts: {error_response.error}"
     
     return json.dumps(result, indent=2)
 
@@ -189,7 +311,7 @@ async def advanced_search(query: str) -> str:
     """Utilize Artifactory Query Language (AQL) for complex searches.
     
     Args:
-        query: AQL query (e.g., 'items.find({"repo": "my-repo"})')
+        query: The AQL query string
     """
     jfrog_client = get_jfrog_client()
     
@@ -197,7 +319,8 @@ async def advanced_search(query: str) -> str:
     result = await jfrog_client.request("POST", endpoint, data=query)
     
     if "error" in result:
-        return f"Failed to execute AQL search: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to execute AQL search: {error_response.error}"
     
     return json.dumps(result, indent=2)
 
@@ -208,8 +331,8 @@ async def create_repository(repo_key: str, repo_type: str, package_type: str) ->
     
     Args:
         repo_key: The repository key
-        repo_type: Repository class (local, remote, virtual, federated)
-        package_type: Package type (maven, npm, docker, etc.)
+        repo_type: The repository type (local, remote, virtual)
+        package_type: The package type (maven, npm, docker, etc.)
     """
     jfrog_client = get_jfrog_client()
     
@@ -223,8 +346,10 @@ async def create_repository(repo_key: str, repo_type: str, package_type: str) ->
     result = await jfrog_client.request("PUT", endpoint, data=data)
     
     if "error" in result:
-        return f"Failed to create repository: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to create repository: {error_response.error}"
     
+    success_response = SuccessResponse()
     return f"Successfully created {repo_type} repository {repo_key} for {package_type} packages"
 
 @mcp.tool()
@@ -270,7 +395,7 @@ async def delete_repository(repo_key: str) -> str:
     """Delete a specified repository.
     
     Args:
-        repo_key: The repository key
+        repo_key: The repository key to delete
     """
     jfrog_client = get_jfrog_client()
     
@@ -278,8 +403,10 @@ async def delete_repository(repo_key: str) -> str:
     result = await jfrog_client.request("DELETE", endpoint)
     
     if "error" in result:
-        return f"Failed to delete repository: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to delete repository: {error_response.error}"
     
+    success_response = SuccessResponse()
     return f"Successfully deleted repository {repo_key}"
 
 @mcp.tool()
@@ -568,8 +695,10 @@ async def integrate_build(build_name: str, build_number: str) -> str:
     result = await jfrog_client.request("POST", endpoint, data=data)
     
     if "error" in result:
-        return f"Failed to integrate build: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to integrate build: {error_response.error}"
     
+    success_response = SuccessResponse()
     return f"Successfully integrated build {build_name} #{build_number}"
 
 # Webhook Management
@@ -596,8 +725,10 @@ async def create_webhook(
     result = await jfrog_client.request("POST", endpoint, data=data)
     
     if "error" in result:
-        return f"Failed to create webhook: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to create webhook: {error_response.error}"
     
+    success_response = SuccessResponse()
     return f"Successfully created webhook {name}"
 
 # Access Control
@@ -624,8 +755,10 @@ async def manage_permissions(
     result = await jfrog_client.request("POST", endpoint, data=data)
     
     if "error" in result:
-        return f"Failed to manage permissions: {result['error']}"
+        error_response = ErrorResponse(error=result["error"])
+        return f"Failed to manage permissions: {error_response.error}"
     
+    success_response = SuccessResponse()
     return f"Successfully set up permissions {name}"
 
 # Main execution
