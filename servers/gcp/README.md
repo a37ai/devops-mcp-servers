@@ -32,7 +32,7 @@ Installation and Setup
      pip install google-cloud-storage google-cloud-bigquery google-cloud-container google-cloud-functions google-api-python-client google-auth
 
 2. GCP Credentials:
-   - Make sure you have proper GCP authentication set up. Typically, you can use Application Default Credentials by running:
+   - Make sure you have proper GCP authentication set up. You can use Application Default Credentials by running:
      gcloud auth application-default login
    - The server will automatically use the default project unless specified otherwise via function parameters.
 
