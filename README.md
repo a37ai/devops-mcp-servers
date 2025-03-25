@@ -35,9 +35,11 @@ Each server implementation includes its own README with detailed documentation o
 
 Most servers require API credentials or tokens to interact with their respective services. Many of these servers will require the .env file to be configured with the relevant credentials. Refer to the individual server documentation for setup instructions.
 
+See the sample-claude-config.json for an example of how to set up the Claude config JSON. Adding too many servers to the Claude config may result in performance decreases, in this case commenting out unnecessary tools will reduce the impact to performance.
+
 ## 🔧 Common Requirements
 
-- Python 3.7+
+- Python 3.7+ (3.13.2 recommended)
 - FastMCP framework 
 - Service-specific API tokens or credentials
 - Required Python packages (install requirements.txt)

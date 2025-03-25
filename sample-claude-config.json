@@ -1,1 +1,13 @@
-{}
+{
+    "mcpServers": {
+      "ansible_tower": {
+        "command": "/path/to/.venv/bin/python",
+        "args": ["/path/to/devops-mcp-servers/ansible_tower/ansible_tower_mcp.py"],
+        "env": {
+          "PYTHONPATH": "/path/to/devops-mcp-servers",
+          "ANSIBLE_BASE_URL": "https://your-ansible-instance.example.com",
+          "ANSIBLE_TOKEN": "your-ansible-api-key"
+        }
+      }
+    }
+  }
