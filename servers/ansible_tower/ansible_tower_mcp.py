@@ -12,6 +12,233 @@ from typing import Dict, List, Any, Optional, Union
 from urllib.parse import urljoin
 from mcp.server.fastmcp import FastMCP, Context
 from dotenv import load_dotenv
+from pydantic import BaseModel, Field, Json, field_validator
+
+# Pydantic Models for API validation
+class AnsibleResponse(BaseModel):
+    """Base model for Ansible API responses."""
+    status: str = "success"
+    message: str | None = None
+    
+class AnsibleErrorResponse(AnsibleResponse):
+    """Error response model."""
+    status: str = "error"
+
+class PaginationParams(BaseModel):
+    """Common pagination parameters."""
+    page_size: int = Field(default=100, description="Maximum number of results to return")
+    page: int = Field(default=1, description="Page number to retrieve")
+
+class JSONString(BaseModel):
+    """Model for validating JSON strings."""
+    json_str: Json = Field(description="JSON string")
+    
+    def get_parsed_json(self) -> dict:
+        """Return the parsed JSON as a Python dictionary."""
+        return json.loads(self.json_str)
+
+# Models for Inventory Management
+class InventoryCreate(BaseModel):
+    """Model for creating an inventory."""
+    name: str = Field(description="Name of the inventory")
+    organization_id: int = Field(description="ID of the organization")
+    description: str = Field(default="", description="Description of the inventory")
+
+class InventoryUpdate(BaseModel):
+    """Model for updating an inventory."""
+    inventory_id: int = Field(description="ID of the inventory")
+    name: str | None = Field(default=None, description="New name for the inventory")
+    description: str | None = Field(default=None, description="New description for the inventory")
+
+# Models for Host Management
+class HostVariables(JSONString):
+    """Model for validating host variables JSON."""
+    pass
+    
+class HostCreate(BaseModel):
+    """Model for creating a host."""
+    name: str = Field(description="Name or IP address of the host")
+    inventory_id: int = Field(description="ID of the inventory to add the host to")
+    variables: str = Field(default="{}", description="JSON string of host variables")
+    description: str = Field(default="", description="Description of the host")
+    
+    @field_validator('variables')
+    def validate_variables_json(cls, v):
+        try:
+            json.loads(v)
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in variables")
+
+class HostUpdate(BaseModel):
+    """Model for updating a host."""
+    host_id: int = Field(description="ID of the host")
+    name: str | None = Field(default=None, description="New name for the host")
+    variables: str | None = Field(default=None, description="JSON string of host variables")
+    description: str | None = Field(default=None, description="New description for the host")
+    
+    @field_validator('variables')
+    def validate_variables_json(cls, v):
+        if v is not None:
+            try:
+                json.loads(v)
+                return v
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in variables")
+        return v
+
+# Models for Group Management
+class GroupCreate(BaseModel):
+    """Model for creating a group."""
+    name: str = Field(description="Name of the group")
+    inventory_id: int = Field(description="ID of the inventory to add the group to")
+    variables: str = Field(default="{}", description="JSON string of group variables")
+    description: str = Field(default="", description="Description of the group")
+    
+    @field_validator('variables')
+    def validate_variables_json(cls, v):
+        try:
+            json.loads(v)
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in variables")
+
+class GroupUpdate(BaseModel):
+    """Model for updating a group."""
+    group_id: int = Field(description="ID of the group")
+    name: str | None = Field(default=None, description="New name for the group")
+    variables: str | None = Field(default=None, description="JSON string of group variables")
+    description: str | None = Field(default=None, description="New description for the group")
+    
+    @field_validator('variables')
+    def validate_variables_json(cls, v):
+        if v is not None:
+            try:
+                json.loads(v)
+                return v
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in variables")
+        return v
+
+# Models for Job Templates API
+class JobTemplateCreate(BaseModel):
+    """Model for creating a job template."""
+    name: str = Field(description="Name of the job template")
+    inventory_id: int = Field(description="ID of the inventory")
+    project_id: int = Field(description="ID of the project")
+    playbook: str = Field(description="Name of the playbook (e.g., 'playbook.yml')")
+    credential_id: int | None = Field(default=None, description="Optional ID of the credential")
+    description: str = Field(default="", description="Description of the job template")
+    extra_vars: str = Field(default="{}", description="JSON string of extra variables")
+    
+    @field_validator('extra_vars')
+    def validate_extra_vars_json(cls, v):
+        try:
+            json.loads(v)
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in extra_vars")
+
+class JobTemplateUpdate(BaseModel):
+    """Model for updating a job template."""
+    template_id: int = Field(description="ID of the job template")
+    name: str | None = Field(default=None, description="New name for the job template")
+    inventory_id: int | None = Field(default=None, description="New inventory ID")
+    playbook: str | None = Field(default=None, description="New playbook name")
+    description: str | None = Field(default=None, description="New description")
+    extra_vars: str | None = Field(default=None, description="JSON string of extra variables")
+    
+    @field_validator('extra_vars')
+    def validate_extra_vars_json(cls, v):
+        if v is not None:
+            try:
+                json.loads(v)
+                return v
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in extra_vars")
+        return v
+
+class JobLaunch(BaseModel):
+    """Model for launching a job."""
+    template_id: int = Field(description="ID of the job template")
+    extra_vars: str | None = Field(default=None, description="JSON string of extra variables")
+    
+    @field_validator('extra_vars')
+    def validate_extra_vars_json(cls, v):
+        if v is not None:
+            try:
+                json.loads(v)
+                return v
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in extra_vars")
+        return v
+
+# Models for Project Management
+class ProjectCreate(BaseModel):
+    """Model for creating a project."""
+    name: str = Field(description="Name of the project")
+    organization_id: int = Field(description="ID of the organization")
+    scm_type: str = Field(description="SCM type (git, svn, etc.)")
+    scm_url: str | None = Field(default=None, description="SCM URL")
+    scm_branch: str | None = Field(default=None, description="SCM branch")
+    scm_credential_id: int | None = Field(default=None, description="ID of the SCM credential")
+    description: str = Field(default="", description="Description of the project")
+
+class ProjectUpdate(BaseModel):
+    """Model for updating a project."""
+    project_id: int = Field(description="ID of the project")
+    name: str | None = Field(default=None, description="New name for the project")
+    scm_type: str | None = Field(default=None, description="New SCM type")
+    scm_url: str | None = Field(default=None, description="New SCM URL")
+    scm_branch: str | None = Field(default=None, description="New SCM branch")
+    scm_credential_id: int | None = Field(default=None, description="New ID of the SCM credential")
+    description: str | None = Field(default=None, description="New description")
+
+# Models for Credential Management
+class CredentialCreate(BaseModel):
+    """Model for creating a credential."""
+    name: str = Field(description="Name of the credential")
+    credential_type_id: int = Field(description="ID of the credential type")
+    organization_id: int | None = Field(default=None, description="ID of the organization")
+    description: str = Field(default="", description="Description of the credential")
+    inputs: str = Field(default="{}", description="JSON string of credential inputs")
+    
+    @field_validator('inputs')
+    def validate_inputs_json(cls, v):
+        try:
+            json.loads(v)
+            return v
+        except json.JSONDecodeError:
+            raise ValueError("Invalid JSON in inputs")
+
+class CredentialUpdate(BaseModel):
+    """Model for updating a credential."""
+    credential_id: int = Field(description="ID of the credential")
+    name: str | None = Field(default=None, description="New name for the credential")
+    description: str | None = Field(default=None, description="New description")
+    inputs: str | None = Field(default=None, description="JSON string of credential inputs")
+    
+    @field_validator('inputs')
+    def validate_inputs_json(cls, v):
+        if v is not None:
+            try:
+                json.loads(v)
+                return v
+            except json.JSONDecodeError:
+                raise ValueError("Invalid JSON in inputs")
+        return v
+
+# Models for Organization Management
+class OrganizationCreate(BaseModel):
+    """Model for creating an organization."""
+    name: str = Field(description="Name of the organization")
+    description: str = Field(default="", description="Description of the organization")
+
+class OrganizationUpdate(BaseModel):
+    """Model for updating an organization."""
+    organization_id: int = Field(description="ID of the organization")
+    name: str | None = Field(default=None, description="New name for the organization")
+    description: str | None = Field(default=None, description="New description")
 
 # Initialize FastMCP server
 mcp = FastMCP("ansible")
@@ -26,8 +253,11 @@ ANSIBLE_TOKEN = os.getenv("ANSIBLE_TOKEN")
 
 # API Client
 class AnsibleClient:
-    def __init__(self, base_url: str, username: str = None, password: str = None, token: str = None):
-        self.base_url = base_url
+    def __init__(self, base_url: str = None, username: str = None, password: str = None, token: str = None):
+        # Ensure base_url ends with a slash for proper URL joining
+        if base_url is None:
+            raise ValueError("base_url cannot be None")
+        self.base_url = base_url if base_url.endswith('/') else f"{base_url}/"
         self.username = username
         self.password = password
         self.token = token
@@ -190,17 +420,23 @@ def handle_pagination(client: AnsibleClient, endpoint: str, params: Dict = None)
 # MCP Tools - Inventory Management
 
 @mcp.tool()
-def list_inventories(limit: int = 100, offset: int = 0) -> str:
+def list_inventories(page_size: int = 100, page: int = 1) -> str:
     """List all inventories.
     
     Args:
-        limit: Maximum number of results to return
-        offset: Number of results to skip
+        page_size: Maximum number of results to return
+        page: Page number to retrieve
     """
-    with get_ansible_client() as client:
-        params = {"limit": limit, "offset": offset}
-        inventories = handle_pagination(client, "/api/v2/inventories/", params)
-        return json.dumps(inventories, indent=2)
+    try:
+        # Create model instance to validate params
+        params = PaginationParams(page_size=page_size, page=page)
+        
+        with get_ansible_client() as client:
+            inventories = handle_pagination(client, "/api/v2/inventories/", params.model_dump())
+            return json.dumps(inventories, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def get_inventory(inventory_id: int) -> str:
@@ -222,14 +458,28 @@ def create_inventory(name: str, organization_id: int, description: str = "") -> 
         organization_id: ID of the organization
         description: Description of the inventory
     """
-    with get_ansible_client() as client:
-        data = {
-            "name": name,
-            "description": description,
-            "organization": organization_id
-        }
-        response = client.request("POST", "/api/v2/inventories/", data=data)
-        return json.dumps(response, indent=2)
+    try:
+        # Validate inputs using Pydantic model
+        inventory_data = InventoryCreate(
+            name=name, 
+            organization_id=organization_id, 
+            description=description
+        )
+        
+        with get_ansible_client() as client:
+            # Convert model to dict for API request
+            data = {
+                "name": inventory_data.name,
+                "description": inventory_data.description,
+                "organization": inventory_data.organization_id
+            }
+            
+            response = client.request("POST", "/api/v2/inventories/", data=data)
+            return json.dumps(response, indent=2)
+            
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def update_inventory(inventory_id: int, name: str = None, description: str = None) -> str:
@@ -275,24 +525,30 @@ def delete_inventory(inventory_id: int) -> str:
 # MCP Tools - Host Management
 
 @mcp.tool()
-def list_hosts(inventory_id: int = None, limit: int = 100, offset: int = 0) -> str:
+def list_hosts(inventory_id: int = None, page_size: int = 100, page: int = 1) -> str:
     """List hosts, optionally filtered by inventory.
     
     Args:
         inventory_id: Optional ID of inventory to filter hosts
-        limit: Maximum number of results to return
-        offset: Number of results to skip
+        page_size: Maximum number of results to return
+        page: Page number to retrieve
     """
-    with get_ansible_client() as client:
-        params = {"limit": limit, "offset": offset}
+    try:
+        # Create model instance to validate params
+        params = PaginationParams(page_size=page_size, page=page)
+        params_dict = params.model_dump()
         
-        if inventory_id:
-            endpoint = f"/api/v2/inventories/{inventory_id}/hosts/"
-        else:
-            endpoint = "/api/v2/hosts/"
-            
-        hosts = handle_pagination(client, endpoint, params)
-        return json.dumps(hosts, indent=2)
+        with get_ansible_client() as client:
+            if inventory_id:
+                endpoint = f"/api/v2/inventories/{inventory_id}/hosts/"
+            else:
+                endpoint = "/api/v2/hosts/"
+                
+            hosts = handle_pagination(client, endpoint, params_dict)
+            return json.dumps(hosts, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def get_host(host_id: int) -> str:
@@ -316,20 +572,29 @@ def create_host(name: str, inventory_id: int, variables: str = "{}", description
         description: Description of the host
     """
     try:
-        # Validate that variables is a proper JSON string
-        json.loads(variables)
-    except json.JSONDecodeError:
-        return json.dumps({"status": "error", "message": "Invalid JSON in variables"})
-    
-    with get_ansible_client() as client:
-        data = {
-            "name": name,
-            "inventory": inventory_id,
-            "variables": variables,
-            "description": description
-        }
-        response = client.request("POST", "/api/v2/hosts/", data=data)
-        return json.dumps(response, indent=2)
+        # Validate inputs using Pydantic model
+        host_data = HostCreate(
+            name=name,
+            inventory_id=inventory_id,
+            variables=variables,
+            description=description
+        )
+        
+        with get_ansible_client() as client:
+            # Convert model to dict for API request
+            data = {
+                "name": host_data.name,
+                "inventory": host_data.inventory_id,
+                "variables": host_data.variables,
+                "description": host_data.description
+            }
+            
+            response = client.request("POST", "/api/v2/hosts/", data=data)
+            return json.dumps(response, indent=2)
+            
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def update_host(host_id: int, name: str = None, variables: str = None, description: str = None) -> str:
@@ -492,17 +757,23 @@ def remove_host_from_group(group_id: int, host_id: int) -> str:
 # MCP Tools - Job Template Management
 
 @mcp.tool()
-def list_job_templates(limit: int = 100, offset: int = 0) -> str:
+def list_job_templates(page_size: int = 100, page: int = 1) -> str:
     """List all job templates.
     
     Args:
-        limit: Maximum number of results to return
-        offset: Number of results to skip
+        page_size: Maximum number of results to return
+        page: Page number to retrieve
     """
-    with get_ansible_client() as client:
-        params = {"limit": limit, "offset": offset}
-        templates = handle_pagination(client, "/api/v2/job_templates/", params)
-        return json.dumps(templates, indent=2)
+    try:
+        # Create model instance to validate params
+        params = PaginationParams(page_size=page_size, page=page)
+        
+        with get_ansible_client() as client:
+            templates = handle_pagination(client, "/api/v2/job_templates/", params.model_dump())
+            return json.dumps(templates, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def get_job_template(template_id: int) -> str:
@@ -621,39 +892,50 @@ def launch_job(template_id: int, extra_vars: str = None) -> str:
         template_id: ID of the job template
         extra_vars: JSON string of extra variables to override the template's variables
     """
-    if extra_vars:
-        try:
-            # Validate that extra_vars is a proper JSON string
-            json.loads(extra_vars)
-        except json.JSONDecodeError:
-            return json.dumps({"status": "error", "message": "Invalid JSON in extra_vars"})
-    
-    with get_ansible_client() as client:
-        data = {}
-        if extra_vars:
-            data["extra_vars"] = extra_vars
+    try:
+        # Validate inputs using Pydantic model
+        job_data = JobLaunch(
+            template_id=template_id,
+            extra_vars=extra_vars
+        )
+        
+        with get_ansible_client() as client:
+            data = {}
+            if job_data.extra_vars:
+                data["extra_vars"] = job_data.extra_vars
+                
+            response = client.request("POST", f"/api/v2/job_templates/{job_data.template_id}/launch/", data=data)
+            return json.dumps(response, indent=2)
             
-        response = client.request("POST", f"/api/v2/job_templates/{template_id}/launch/", data=data)
-        return json.dumps(response, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 # MCP Tools - Job Management
 
 @mcp.tool()
-def list_jobs(status: str = None, limit: int = 100, offset: int = 0) -> str:
+def list_jobs(status: str = None, page_size: int = 100, page: int = 1) -> str:
     """List all jobs, optionally filtered by status.
     
     Args:
         status: Filter by job status (pending, waiting, running, successful, failed, canceled)
-        limit: Maximum number of results to return
-        offset: Number of results to skip
+        page_size: Maximum number of results to return
+        page: Page number to retrieve
     """
-    with get_ansible_client() as client:
-        params = {"limit": limit, "offset": offset}
+    try:
+        # Create model instance to validate params
+        params = PaginationParams(page_size=page_size, page=page)
+        params_dict = params.model_dump()
+        
         if status:
-            params["status"] = status
+            params_dict["status"] = status
             
-        jobs = handle_pagination(client, "/api/v2/jobs/", params)
-        return json.dumps(jobs, indent=2)
+        with get_ansible_client() as client:
+            jobs = handle_pagination(client, "/api/v2/jobs/", params_dict)
+            return json.dumps(jobs, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def get_job(job_id: int) -> str:
@@ -711,17 +993,23 @@ def get_job_stdout(job_id: int, format: str = "txt") -> str:
 # MCP Tools - Project Management
 
 @mcp.tool()
-def list_projects(limit: int = 100, offset: int = 0) -> str:
+def list_projects(page_size: int = 100, page: int = 1) -> str:
     """List all projects.
     
     Args:
-        limit: Maximum number of results to return
-        offset: Number of results to skip
+        page_size: Maximum number of results to return
+        page: Page number to retrieve
     """
-    with get_ansible_client() as client:
-        params = {"limit": limit, "offset": offset}
-        projects = handle_pagination(client, "/api/v2/projects/", params)
-        return json.dumps(projects, indent=2)
+    try:
+        # Create model instance to validate params
+        params = PaginationParams(page_size=page_size, page=page)
+        
+        with get_ansible_client() as client:
+            projects = handle_pagination(client, "/api/v2/projects/", params.model_dump())
+            return json.dumps(projects, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def get_project(project_id: int) -> str:
@@ -842,17 +1130,23 @@ def sync_project(project_id: int) -> str:
 # MCP Tools - Credential Management
 
 @mcp.tool()
-def list_credentials(limit: int = 100, offset: int = 0) -> str:
+def list_credentials(page_size: int = 100, page: int = 1) -> str:
     """List all credentials.
     
     Args:
-        limit: Maximum number of results to return
-        offset: Number of results to skip
+        page_size: Maximum number of results to return
+        page: Page number to retrieve
     """
-    with get_ansible_client() as client:
-        params = {"limit": limit, "offset": offset}
-        credentials = handle_pagination(client, "/api/v2/credentials/", params)
-        return json.dumps(credentials, indent=2)
+    try:
+        # Create model instance to validate params
+        params = PaginationParams(page_size=page_size, page=page)
+        
+        with get_ansible_client() as client:
+            credentials = handle_pagination(client, "/api/v2/credentials/", params.model_dump())
+            return json.dumps(credentials, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def get_credential(credential_id: int) -> str:
@@ -896,22 +1190,31 @@ def create_credential(
         description: Description of the credential
     """
     try:
-        # Validate that inputs is a proper JSON string
-        json.loads(inputs)
-    except json.JSONDecodeError:
-        return json.dumps({"status": "error", "message": "Invalid JSON in inputs"})
-    
-    with get_ansible_client() as client:
-        data = {
-            "name": name,
-            "credential_type": credential_type_id,
-            "organization": organization_id,
-            "inputs": json.loads(inputs),
-            "description": description
-        }
+        # Validate inputs using Pydantic model
+        credential_data = CredentialCreate(
+            name=name,
+            credential_type_id=credential_type_id,
+            organization_id=organization_id,
+            inputs=inputs,
+            description=description
+        )
+        
+        with get_ansible_client() as client:
+            # Convert model to dict for API request
+            data = {
+                "name": credential_data.name,
+                "credential_type": credential_data.credential_type_id,
+                "organization": credential_data.organization_id,
+                "inputs": json.loads(credential_data.inputs),
+                "description": credential_data.description
+            }
+                
+            response = client.request("POST", "/api/v2/credentials/", data=data)
+            return json.dumps(response, indent=2)
             
-        response = client.request("POST", "/api/v2/credentials/", data=data)
-        return json.dumps(response, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def update_credential(
@@ -961,15 +1264,23 @@ def delete_credential(credential_id: int) -> str:
 # MCP Tools - Organization Management
 
 @mcp.tool()
-def list_organizations() -> str:
+def list_organizations(page_size: int = 100, page: int = 1) -> str:
     """List all organizations.
     
     Args:
-        none
+        page_size: Maximum number of results to return
+        page: Page number to retrieve
     """
-    with get_ansible_client() as client:
-        organizations = handle_pagination(client, "/api/v2/organizations/", {})
-        return json.dumps(organizations, indent=2)
+    try:
+        # Create model instance to validate params
+        params = PaginationParams(page_size=page_size, page=page)
+        
+        with get_ansible_client() as client:
+            organizations = handle_pagination(client, "/api/v2/organizations/", params.model_dump())
+            return json.dumps(organizations, indent=2)
+    except ValueError as e:
+        # Handle validation errors
+        return json.dumps(AnsibleErrorResponse(message=str(e)).model_dump(), indent=2)
 
 @mcp.tool()
 def get_organization(organization_id: int) -> str:
