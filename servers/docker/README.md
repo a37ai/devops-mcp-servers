@@ -1,162 +1,172 @@
-Docker MCP Server
-==================
+# Docker MCP Server
 
-The Docker MCP Server is an implementation of the Model Context Protocol (MCP) that provides a standardized interface for interacting with Docker. With this server, you can manage containers, images, networks, and volumes efficiently through a suite of asynchronous tools.
+Docker MCP Server is an implementation of the Model Context Protocol (MCP) that provides an intuitive and standardized interface for managing Docker resources. This server leverages the Docker SDK for Python to offer a comprehensive set of tools for interacting with Docker containers, images, networks, and volumes.
 
-Overview
---------
+---
 
-This server leverages the Docker Python API to enable the following operations:
+## Overview
 
-• Container management – list, create, run, recreate, start, fetch logs, stop, and remove containers  
-• Image management – list images, pull, push, build, and remove images  
-• Network management – list, create, and remove Docker networks  
-• Volume management – list, create, and remove Docker volumes
+The Docker MCP Server enables users to seamlessly manage Docker environments through a series of asynchronous tools. Whether you need to list running containers, create new images, or configure networks and volumes, this project provides robust endpoints to perform common Docker operations without writing custom Docker commands.
 
-By providing these endpoints, the server abstracts common Docker operations behind a simple MCP interface, making it easier to integrate Docker management into your workflows.
+---
 
-Features
---------
+## Features
 
-• Robust Container Tools:  
- – List running or all containers  
- – Create new containers without starting them  
- – Create and immediately run containers  
- – Recreate containers with existing settings  
- – Start or stop containers, fetch logs, and remove containers  
+• Container Tools  
+  – List containers (with options to include all or only running containers)  
+  – Create new containers without starting  
+  – Create and run containers  
+  – Recreate containers with identical configurations  
+  – Start, stop, and remove containers  
+  – Fetch container logs
 
-• Comprehensive Image Tools:  
- – List available Docker images  
- – Pull images from any Docker registry  
- – Push local images to a registry  
- – Build images from Dockerfiles  
- – Remove images as needed  
+• Image Tools  
+  – List all available Docker images  
+  – Pull images from registries with tagging support  
+  – Push images to registries  
+  – Build Docker images from a Dockerfile  
+  – Remove images
 
-• Flexible Network Tools:  
- – List Docker networks with detailed metadata  
- – Create new networks with customizable drivers and labels  
- – Remove networks seamlessly  
+• Network Tools  
+  – List Docker networks with driver and container mapping info  
+  – Create new networks with configurable driver and settings  
+  – Remove existing networks
 
-• Versatile Volume Tools:  
- – List volumes including details such as mount point and creation time  
- – Create volumes with specified drivers and labels  
- – Remove volumes, with force option for active volumes  
+• Volume Tools  
+  – List all Docker volumes with details such as mount points and creation dates  
+  – Create new volumes with driver and label options  
+  – Remove volumes with optional force removal
 
-• Standardized MCP Interface:  
- – All tools are exposed via the MCP protocol using asynchronous functions  
- – Easy integration with other systems that support MCP  
+---
 
-Installation & Prerequisites
-----------------------------
+## Prerequisites
 
-1. Docker Environment:  
- Ensure that Docker is installed and the Docker daemon is running on your system.
+• Python 3.7 or later  
+• Docker installed and running on the host system  
+• Docker SDK for Python (install using pip: `pip install docker`)  
+• MCP framework module (FastMCP) for the server functionalities
 
-2. Python Dependencies:  
- • Python 3.7 or higher  
- • Docker Python SDK  
- • MCP Server (FastMCP and Context modules)
+---
 
-3. Install required Python packages (if not already installed):  
- pip install docker fastmcp
+## Installation
 
-4. Clone or download the Docker MCP Server code to your local environment.
+1. Clone or download the Docker MCP Server repository.
+2. Install the required dependencies using pip:
 
-Configuration
--------------
+  pip install docker  
+  pip install fastmcp
 
-• The Docker client is created using the environment settings (docker.from_env()), so ensure that your environment is configured to connect to the Docker daemon correctly.  
-• Logging is configured at the INFO level to provide runtime feedback on operations and errors.
+3. Ensure that Docker is installed and that your user has permissions to manage Docker (e.g., by adding your user to the Docker group on Linux).
 
-Usage
------
+---
 
-To start the Docker MCP Server, simply run the Python script:
+## Configuration
 
- python docker_mcp_server.py
+Before running the server, ensure that the Docker daemon is accessible from your environment (e.g., via environment variables generated by Docker or through socket access). The server will attempt to create a Docker client using `docker.from_env()`, and a successful connection will be logged.
 
-This will initialize the MCP server with the “docker” context and bind all the defined tools for container, image, network, and volume management.
+---
 
-Tools Reference
----------------
+## Usage
 
-Below is an overview of the available MCP tools and their key parameters:
+### Running the Server
 
-Container Tools
-~~~~~~~~~~~~~~~~
-1. list_containers(show_all: bool = False)  
- • Lists running containers by default; set show_all=True to include stopped containers.
+To start the Docker MCP Server, simply run the main script:
 
-2. create_container(...):  
- • Creates a new container without starting it.  
- • Parameters include image, name, command, ports, environment, volumes, and detach flag.
+  python docker_mcp_server.py
 
-3. run_container(...):  
- • Creates and starts a container based on the provided configuration.
+The server will initialize the MCP instance and establish a connection to the Docker daemon. If the connection fails, an error message will be logged and the process will abort.
 
-4. recreate_container(container_id: str, start: bool = True)  
- • Recreates a container using its current settings. Optionally starts the container.
+### Available MCP Tools
 
-5. start_container(container_id: str)  
- • Starts a stopped container.
+The Docker MCP Server exposes the following tools as asynchronous endpoints:
 
-6. fetch_container_logs(container_id: str, tail: int = 100)  
- • Retrieves container logs, showing the last ‘tail’ number of lines.
+#### Container Management
+• **list_containers(show_all: bool = False)**  
+  Lists all containers (optionally including stopped containers). Returns detailed container information as a JSON-formatted string.
 
-7. stop_container(container_id: str, timeout: int = 10)  
- • Stops a running container with a given timeout before forcefully stopping it.
+• **create_container(image: str, name: Optional[str] = None, command: Optional[str] = None, ports: Optional[Dict[str, str]] = None, environment: Optional[Dict[str, str]] = None, volumes: Optional[Dict[str, str]] = None, detach: bool = True)**  
+  Creates a new container without starting it, allowing configuration of ports, environment variables, and volume bindings.
 
-8. remove_container(container_id: str, force: bool = False)  
- • Removes a container, with an option to force removal even if running.
+• **run_container(image: str, name: Optional[str] = None, command: Optional[str] = None, ports: Optional[Dict[str, str]] = None, environment: Optional[Dict[str, str]] = None, volumes: Optional[Dict[str, str]] = None, detach: bool = True)**  
+  Creates and starts a container with the specified configuration.
 
-Image Tools
-~~~~~~~~~~~
-1. list_images()  
- • Lists all available Docker images with details such as size and creation time.
+• **recreate_container(container_id: str, start: bool = True)**  
+  Recreates a container using its current settings. Can optionally start the new container immediately.
 
-2. pull_image(image_name: str, tag: str = "latest")  
- • Pulls an image from a Docker registry.
+• **start_container(container_id: str)**  
+  Starts a stopped container.
 
-3. push_image(image_name: str, tag: str = "latest")  
- • Pushes a local image to a registry.
+• **fetch_container_logs(container_id: str, tail: int = 100)**  
+  Retrieves log output from a specified container. The log tail can be customized.
 
-4. build_image(path: str, tag: str, dockerfile: str = "Dockerfile", rm: bool = True, nocache: bool = False)  
- • Builds an image from a specified Dockerfile.
+• **stop_container(container_id: str, timeout: int = 10)**  
+  Stops a running container, with an optional timeout before forceful termination.
 
-5. remove_image(image_id: str, force: bool = False)  
- • Removes a Docker image.
+• **remove_container(container_id: str, force: bool = False)**  
+  Removes a container, with an option to force removal if the container is still running.
 
-Network Tools
-~~~~~~~~~~~~~
-1. list_networks()  
- • Lists Docker networks with details including driver and associated containers.
+#### Image Management
+• **list_images()**  
+  Provides a JSON-formatted list of all Docker images, including tags, sizes, and creation dates.
 
-2. create_network(name: str, driver: str = "bridge", internal: bool = False, labels: Optional[Dict[str, str]] = None)  
- • Creates a new Docker network with customizable settings.
+• **pull_image(image_name: str, tag: str = "latest")**  
+  Fetches a Docker image from a remote registry.
 
-3. remove_network(network_id: str)  
- • Removes a Docker network by ID or name.
+• **push_image(image_name: str, tag: str = "latest")**  
+  Pushes a tagged Docker image to a registry. (Authentication configuration can be added as needed.)
 
-Volume Tools
-~~~~~~~~~~~~
-1. list_volumes()  
- • Lists all Docker volumes with metadata such as mountpoint and creation time.
+• **build_image(path: str, tag: str, dockerfile: str = "Dockerfile", rm: bool = True, nocache: bool = False)**  
+  Builds a Docker image from the specified Dockerfile and directory.
 
-2. create_volume(name: str, driver: str = "local", labels: Optional[Dict[str, str]] = None)  
- • Creates a new volume using the specified driver and labels.
+• **remove_image(image_id: str, force: bool = False)**  
+  Removes a Docker image from the local repository.
 
-3. remove_volume(volume_name: str, force: bool = False)  
- • Removes a volume, with an option to force removal.
+#### Network Management
+• **list_networks()**  
+  Lists all Docker networks along with driver and container information.
 
-Logging & Error Handling
--------------------------
-• The server utilizes the Python logging module configured at the INFO level to report successful operations and errors.  
-• Each tool function is designed to catch exceptions and return concise error messages, ensuring proper feedback during interactions.
+• **create_network(name: str, driver: str = "bridge", internal: bool = False, labels: Optional[Dict[str, str]] = None)**  
+  Creates a new network with specified settings.
 
-Conclusion
-----------
-The Docker MCP Server offers a robust, standardized interface for managing Docker resources. Whether you are integrating it into larger orchestration workflows or need a simple way to manage Docker via MCP, this server provides the necessary tools in an organized, asynchronous framework.
+• **remove_network(network_id: str)**  
+  Removes an existing Docker network.
 
-For further questions or contributions, please refer to the project repository and associated documentation.
+#### Volume Management
+• **list_volumes()**  
+  Lists all Docker volumes with details such as driver, mountpoint, and creation date.
 
-Happy Dockering!
+• **create_volume(name: str, driver: str = "local", labels: Optional[Dict[str, str]] = None)**  
+  Creates a new Docker volume with specified options.
+
+• **remove_volume(volume_name: str, force: bool = False)**  
+  Removes a Docker volume (with an option for force removal).
+
+Each tool is implemented as an asynchronous function and decorated using the MCP framework, making them readily accessible for client interactions.
+
+---
+
+## Logging
+
+The server utilizes Python’s built-in logging module at the INFO level to provide real-time feedback on operations, including success and error messages. Logs are printed to the console, ensuring that administrators can quickly diagnose issues such as failed connections or errors during Docker operations.
+
+---
+
+## Contributing
+
+Contributions and suggestions are welcome. If you encounter any issues, please submit a bug report or feature request.
+
+---
+
+## License
+
+This project is licensed under the terms defined in the LICENSE file.
+
+---
+
+## Acknowledgments
+
+Special thanks to the developers of Docker SDK for Python and the contributors to the Model Context Protocol framework, whose work made this project possible.
+
+---
+
+Docker MCP Server provides a professional and scalable solution for developers and system administrators to manage Docker environments efficiently. Happy Dockering!

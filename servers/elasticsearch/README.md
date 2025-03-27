@@ -1,105 +1,105 @@
-ELK MCP Server
-==============
+Elasticsearch MCP Server
+==========================
 
 Overview
 --------
-ELK MCP Server is an implementation of an MCP (Modular Control Protocol) server designed to simplify and streamline interactions with an Elasticsearch cluster. By leveraging asynchronous operations and the FastMCP framework, this server exposes a comprehensive suite of tools and APIs for managing cluster health, indices, documents, searches, ingest pipelines, and more—all through clean and well-documented endpoints.
+Elasticsearch MCP Server is an MCP (Multi-Channel Protocol) server implementation built using FastMCP that provides a suite of tools to interact with an Elasticsearch instance. This server leverages modern Python libraries such as httpx for asynchronous HTTP requests, pydantic for robust data validation, and python-dotenv for environment configuration. With a modular design supporting a wide range of Elasticsearch operations—from cluster health and stats to document indexing and multi-search—the server aims to simplify integration and management of Elasticsearch clusters.
 
-Key Features
-------------
-•  Comprehensive API Coverage – Manage cluster health, configurations, indices, documents, searches, ingest pipelines, templates, and node information.  
-•  Asynchronous Operations – All endpoints are built asynchronously using httpx for efficient interaction with Elasticsearch.  
-•  Flexible Query Options – Supports both advanced and simplified search interfaces, including multi-search and bulk operations.  
-•  Ingest Pipeline Simulation – Test pipeline configurations with verbose feedback.  
-•  Dynamic Configuration – Easily set your Elasticsearch base URL and API token via environment variables.  
-•  Error Handling & Logging – Integrated logging provides clear insights and error messages for troubleshooting.
-
-Architecture & Tools
---------------------
-The server is built around the FastMCP framework to expose an array of MCP tools (endpoints), each corresponding to one or more Elasticsearch REST APIs. Major components include:
-
-1. Cluster APIs  
-   •  cluster_health – Check overall health or specific index health with optional timeout and detailed level information.  
-   •  cluster_stats – Retrieve detailed cluster statistics, optionally per node.  
-   •  cluster_settings – Get or update cluster settings with an option to include defaults.
-
-2. Index APIs  
-   •  create_index, get_index, delete_index – Create, retrieve, and delete indices with support for custom settings, mappings, and aliases.  
-   •  get_mapping, update_mapping – Manage index mappings efficiently.  
-   •  list_indices – List available indices with filtering support.
-
-3. Document APIs  
-   •  index_document, get_document, delete_document – Create/update documents or manage document retrieval and deletion with refresh policies.  
-   •  bulk_operations – Execute bulk operations using NDJSON formatted requests.
-
-4. Search APIs  
-   •  search – A flexible endpoint to run custom Elasticsearch queries with support for pagination, sorting, and aggregations.  
-   •  simple_search – An easy-to-use search interface for common queries with exact or fuzzy matching options.  
-   •  count_documents – Count documents that match a given query.  
-   •  multi_search – Perform multiple searches in a single request via the _msearch elastic API.
-
-5. Ingest APIs  
-   •  create_pipeline, get_pipeline, delete_pipeline – Manage ingest pipelines for pre-processing documents prior to indexing.  
-   •  simulate_pipeline – Test pipeline configurations with sample documents and get verbose output if required.
-
-6. Info & Additional APIs  
-   •  node_info, node_stats – Retrieve node-level metrics and statistics from the cluster.  
-   •  cat_indices, cat_nodes, cat_aliases – Use the _cat endpoints for human-readable listings of indices, nodes, and aliases.  
-   •  create_index_template, get_index_template, delete_index_template – Manage index templates for defining default settings and mappings.
+Features
+--------
+• Comprehensive API Support – Provides endpoints for Elasticsearch Cluster, Index, Document, Search, Ingest, Info, and Additional Template APIs.  
+• Robust Parameter Validation – Uses Pydantic models to enforce strict validation and sanitation of input parameters for each endpoint.  
+• Asynchronous Operations – Built with asynchronous programming patterns using httpx, ensuring efficient I/O operations under a heavy load.  
+• Serverless Mode Awareness – Detects Elasticsearch Serverless mode and adjusts behavior accordingly, preventing incompatible operations.  
+• Flexible Request Building – Supports multiple HTTP methods (GET, POST, PUT, DELETE) and content types, including NDJSON for bulk data operations.
 
 Installation
 ------------
-1. Prerequisites:  
-   •  Python 3.8 or later  
-   •  An Elasticsearch cluster (version compatible with your REST endpoints)  
-   •  Required Python libraries: httpx, python-dotenv, logging (standard), and mcp.
+1. Requirements  
+   • Python 3.8 (or higher)  
+   • Dependencies listed in requirements.txt (FastMCP, httpx, python-dotenv, pydantic)
 
-2. Install Dependencies:  
-   Create a virtual environment and install the necessary packages. For example:
+2. Setup  
+   • Clone the repository and navigate to the project directory.  
+   • Install dependencies using pip:  
      
-     $ python -m venv venv
-     $ source venv/bin/activate
-     $ pip install httpx python-dotenv fastmcp
-
-3. Set Up Environment Variables:  
-   Create a .env file in the project root with the following variables:
-     
-     ELASTICSEARCH_BASE_URL=https://your-elasticsearch-host:9200
-     ELASTICSEARCH_TOKEN=your_api_key_or_token
-
-Usage
------
-Start the MCP server by executing the main module. The server will initialize the registered MCP tools and start listening for requests.
-
-     $ python path/to/your_script.py
-
-Each endpoint can be called through the MCP interface. For example, use the "cluster_health" tool to get the current health status of your cluster, or "simple_search" to perform quick document queries.
-
-Logging & Error Handling
-------------------------
-Logging is configured to capture informational messages and errors with time stamps, source names, and severity levels. In case of errors when making requests to Elasticsearch, detailed error messages with the HTTP status code and response are logged and returned.
+         pip install -r requirements.txt
 
 Configuration
 -------------
-•  ELASTICSEARCH_BASE_URL: Base URL for your Elasticsearch cluster.  
-•  ELASTICSEARCH_TOKEN: Authentication token for the Elasticsearch cluster (if required).
+The MCP server requires configuration of essential environment variables to communicate with your Elasticsearch instance. Create a .env file in the project root and define the following variables:
 
-Additional Information
-----------------------
-•  The MCP server is built on an asynchronous framework, allowing for scalable and efficient handling of multiple concurrent requests.  
-•  The architecture emphasizes modularity, making it straightforward to add or modify endpoints as needed.  
-•  Each API endpoint sanitizes and formats responses for clarity, ensuring that both success and error messages are easy to understand.
+   • ELASTICSEARCH_BASE_URL – Base URL of your Elasticsearch instance (e.g., "http://localhost:9200").  
+   • ELASTICSEARCH_TOKEN – (Optional) API token for authenticating requests with Elasticsearch.
 
-Contributing
-------------
-Contributions are welcome! To contribute, please fork this repository, create a feature branch, and submit a pull request with detailed explanations of your changes.
+Example .env file:
 
-License
+   ELASTICSEARCH_BASE_URL=http://localhost:9200
+   ELASTICSEARCH_TOKEN=your_api_token_here
+
+Usage
+-----
+The Elasticsearch MCP Server organizes its functionality into modular API tools. Each tool is decorated with a validation wrapper ensuring that the passed parameters adhere to the expected schema. Below is an overview of the API groups:
+
+1. Cluster APIs  
+   • cluster_health – Retrieve the health status of the Elasticsearch cluster.  
+   • cluster_stats – Get comprehensive cluster statistics.  
+   • cluster_settings – Retrieve or update cluster-wide settings (with serverless mode support).
+
+2. Index APIs  
+   • create_index – Create a new index with optional settings, mappings, and aliases.  
+   • get_index – Retrieve detailed index information.  
+   • delete_index – Delete a specified index.  
+   • get_mapping & update_mapping – Fetch or update index mapping definitions.  
+   • list_indices – List all indices with optional filtering based on a pattern.
+
+3. Document APIs  
+   • index_document – Create or update a document within an index.  
+   • get_document – Retrieve a document by its ID including selective source filtering.  
+   • delete_document – Remove a document, with refresh support.  
+   • bulk_operations – Execute multiple document operations in a single NDJSON formatted request.
+
+4. Search APIs  
+   • search – Execute searches with full control over query DSL, pagination, sorting, aggregations, and source filtering.  
+   • simple_search – Simplified search interface using basic keyword queries with optional field targeting.  
+   • count_documents – Count documents matching a specific query.  
+   • multi_search – Perform multiple searches in one request using NDJSON formatting.
+
+5. Ingest APIs  
+   • create_pipeline – Create or update an ingest pipeline with an array of processors.  
+   • get_pipeline – Retrieve a specific or all ingest pipelines.  
+   • delete_pipeline – Remove an ingest pipeline by ID.  
+   • simulate_pipeline – Simulate an ingest pipeline on provided documents for testing.
+
+6. Info APIs  
+   • node_info – Retrieve information about cluster nodes (adjusts for serverless mode).  
+   • node_stats – Get detailed node statistics with optional index metric filtering.  
+   • cluster_info – Fetch basic cluster information.  
+   • cat_indices, cat_nodes, cat_aliases – Retrieve human-readable status and details using Elasticsearch Cat APIs.
+
+7. Additional APIs (Templates and more)  
+   • create_index_template – Create or update index templates with support for custom settings and mappings.  
+   • get_index_template – Retrieve one or all index templates.  
+   • delete_index_template – Delete a specified index template.
+
+Running the Server
+------------------
+Once configured, you can run the MCP server directly from the command line:
+
+   python your_main_script.py
+
+The server initialization code will set up FastMCP, configure logging, and listen for incoming requests. Detailed log messages will help you trace operations and easily diagnose errors.
+
+Logging
 -------
-This project is open source. Please refer to the LICENSE file for more details about usage and distribution rights.
+The server is configured to use Python’s built-in logging module. Logging is set at the INFO level by default, and each significant operation (such as API calls or validation errors) is logged with timestamps and details. You can adjust the logging configuration as needed.
 
-Contact
--------
-For questions or support, please reach out to the project maintainer or submit an issue on the GitHub repository.
+Error Handling
+--------------
+Each API tool includes comprehensive error-handling. Elasticsearch responses are parsed and, in case of non-successful HTTP status codes, descriptive error messages are returned. Validation errors from Pydantic are caught by the decorator, ensuring that clients receive clear feedback on bad input parameters.
 
-By integrating fast, asynchronous operations with comprehensive API support, the ELK MCP Server serves as a powerful tool for developers and administrators looking to streamline their Elasticsearch management tasks. Enjoy a simplified experience managing your Elasticsearch cluster!
+Conclusion
+----------
+The Elasticsearch MCP Server provides a powerful and flexible foundation for integrating with Elasticsearch clusters. Its modular design, emphasis on validation, and serverless compatibility make it an excellent choice for developers looking to manage Elasticsearch operations in a scalable and modern Python environment.
+
+For further details, please refer to the inline documentation within the code and the API tool decorators, which offer additional insights into each endpoint’s parameters and behaviors.

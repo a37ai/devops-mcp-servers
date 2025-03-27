@@ -9,6 +9,7 @@ Each MCP server implementation provides a comprehensive set of tools that map to
 The following MCP servers are included in this repository (in alphabetical order):
 
 * **[Ansible Tower](https://github.com/a37ai/devops-mcp-servers/tree/main/servers/ansible_tower)** - Comprehensive API integration with Ansible Tower/AWX for managing inventories, hosts, job templates, projects, and more
+* **[Argo CD](https://github.com/a37ai/devops-mcp-servers/tree/main/servers/argocd)** - Argo CD GitOps continuous delivery tool integration for application management, project configuration, repository connections, and cluster operations
 * **[Artifactory](https://github.com/a37ai/devops-mcp-servers/tree/main/servers/artifactory)** - JFrog Artifactory integration for artifact management, repository configuration, and binary management
 * **[AWS](https://github.com/a37ai/devops-mcp-servers/tree/main/servers/aws)** - AWS service integration for S3, EC2, Lambda, and custom AWS code execution
 * **[Azure](https://github.com/a37ai/devops-mcp-servers/tree/main/servers/azure)** - Azure resource management including resource groups, storage accounts, virtual machines, and more

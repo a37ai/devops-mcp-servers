@@ -1,108 +1,128 @@
 Bitbucket Cloud MCP Server
-============================
+===========================
 
 Overview
 --------
-The Bitbucket Cloud MCP Server is an implementation built on top of the FastMCP framework, integrating Bitbucket Cloud’s REST API v2.0. It provides a rich suite of tools for managing Bitbucket resources, including user profiles, workspaces, projects, repositories, pull requests, branches, pipelines, snippets, and more. This server enables seamless automation and integration with Bitbucket Cloud using simple function calls.
+The Bitbucket Cloud MCP Server is an implementation of an MCP (Modular Command Protocol) server that integrates directly with the Bitbucket Cloud API v2.0. This server leverages the FastMCP framework along with Pydantic models for input validation and response formatting, providing a robust and scalable solution for interacting with Bitbucket Cloud. The server supports a wide range of Bitbucket functions including user and workspace management, projects and repositories handling, branch/tag operations, commit and pull request operations, issue tracking, pipelines (CI/CD), and snippet management.
 
 Features
 --------
-• Secure Authentication:  
-  Uses Basic Authentication with BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD set via environment variables or context configuration.
+•  Authentication Integration: Uses environment variables (BITBUCKET_USERNAME and BITBUCKET_APP_PASSWORD) for secure credentials management.
+•  Extensive API Tools: Provides a comprehensive set of tools for user profiles, workspaces, projects, repositories, branches, tags, commits, pull requests, issues, webhooks, deploy keys, pipelines, and snippets.
+•  Input Validation: Utilizes Pydantic models to ensure data integrity and proper formatting of API requests and responses.
+•  Flexible Data Formatting: Formats all API responses as JSON with clear indentation for readability.
+•  Error Handling: Implements robust error checking including HTTP error code responses and JSON validation.
 
-• Comprehensive API Toolset:  
-  Access user and workspace information, manage projects and repositories, manage branches and tags, work with commits and pull requests, and operate on issues and pipelines.
+Tools & Endpoints
+------------------
+The server registers numerous tools that wrap Bitbucket Cloud API endpoints. Some of the key tools include:
 
-• Repository Administration:  
-  Tools for handling deployment keys, webhooks, branch restrictions, and repository settings.
+User & Workspace Tools
+•  get_current_user: Retrieve information about the authenticated Bitbucket user.
+•  get_user_profile: Fetch public profile details for a specific user.
+•  list_workspaces: List all workspaces available to the authenticated user; supports optional role filtering and pagination.
+•  get_workspace: Retrieve detailed information for a given workspace.
 
-• Pipelines & Snippets Support:  
-  List, trigger, and manage pipelines as well as create and retrieve code snippets through dedicated tools.
+Project Management Tools
+•  list_projects: List projects within a specified workspace.
+•  create_project: Create a new project in a workspace.
+•  get_project: Retrieve project details by its key.
+•  update_project: Update project metadata such as name, description, and privacy settings.
+•  delete_project: Remove a project from the workspace.
 
-• Readable Responses:  
-  API responses are formatted as readable JSON, simplifying debugging and integration.
+Repository Management Tools
+•  list_repositories: List repositories globally or within a workspace with optional role filtering.
+•  get_repository: Retrieve repository details.
+•  create_repository: Create a new Git repository in a workspace.
+•  update_repository: Update repository settings.
+•  delete_repository: Delete a repository.
+
+Branch & Tag Management Tools
+•  list_branches & create_branch: Manage repository branches.
+•  list_tags & create_tag: List and create repository tags.
+
+Commit & Source Code Tools
+•  list_commits & get_commit: List commits, retrieve commit details and diffs.
+•  add_commit_comment: Post comments on specific commits.
+•  get_file_content: Fetch raw file content from repositories.
+
+Pull Request Tools
+•  list_pull_requests: List pull requests with state and pagination support.
+•  create_pull_request: Open a new pull request.
+•  get_pull_request: Retrieve details for a specific pull request.
+•  approve_pull_request & unapprove_pull_request: Manage pull request approvals.
+•  merge_pull_request & decline_pull_request: Handle merging or declining of pull requests.
+•  add_pull_request_comment: Comment on pull requests.
+
+Repository Administration Tools
+•  list_branch_restrictions & create_branch_restriction: Manage branch restrictions.
+•  list_deploy_keys, add_deploy_key & delete_deploy_key: Manage SSH deploy keys.
+•  list_webhooks, create_webhook & delete_webhook: Manage repository webhooks.
+
+Issue Tracker Tools
+•  list_issues, create_issue, get_issue, update_issue, add_issue_comment: Tools for issue management.
+
+Pipeline (CI/CD) Tools
+•  list_pipelines, trigger_pipeline, get_pipeline, stop_pipeline: Tools for managing Bitbucket Pipelines.
+
+Snippet Tools
+•  list_snippets: List code snippets globally or by workspace.
+•  create_snippet, get_snippet, get_snippet_file, delete_snippet: Manage snippets.
 
 Installation & Setup
-----------------------
-1. Requirements:
-   - Python 3.7 or higher.
-   - Required Python packages: httpx, python-dotenv, and any dependencies included in the FastMCP framework.
-   - A valid Bitbucket Cloud account with an App Password.
+--------------------
+1. Prerequisites:
+   •  Python 3.8+ is required.
+   •  Ensure you have pip installed.
 
-2. Clone or download the repository containing the Bitbucket Cloud MCP Server code.
+2. Clone the repository and navigate to the project directory.
 
-3. Install the necessary dependencies (for example, using pip):
-   pip install httpx python-dotenv fastmcp
+3. Install the required dependencies:
 
-4. Environment Configuration:
-   Create a .env file in the project root and set your Bitbucket credentials:
-  
-      BITBUCKET_USERNAME=your_bitbucket_username
-      BITBUCKET_APP_PASSWORD=your_bitbucket_app_password
+   pip install -r requirements.txt
 
-   Alternatively, you can set these values in your system’s environment variables.
+4. Create a .env file in the project root with the following environment variables:
+
+   BITBUCKET_USERNAME=your_bitbucket_username
+   BITBUCKET_APP_PASSWORD=your_bitbucket_app_password
+
+   These credentials are used to authenticate with the Bitbucket Cloud API.
+
+5. Run the MCP server:
+
+   python your_script.py
+
+   When executed directly, the server launches with the stdio transport.
+
+Configuration
+-------------
+•  API Base URL: The server interacts with Bitbucket Cloud API v2.0 using the base URL https://api.bitbucket.org/2.0.
+•  Authentication: The helper function get_auth_header() fetches credentials from environment variables and encodes them as required by Bitbucket using HTTP Basic Auth.
+•  Pagination & Validation: All list endpoints use Pydantic models like PaginationParams to validate and control pagination parameters (page number, pagelen, etc.).
 
 Usage
 -----
-To run the MCP server using the stdio transport, execute the module directly:
+Once running, the server exposes many MCP tools that allow you to interact with Bitbucket functionalities programmatically. You can call these tools from your MCP client or incorporate them into larger applications for automated Bitbucket operations.
 
-   python <filename>.py
+For example:
+•  Use get_current_user to quickly verify your authentication credentials.
+•  Use list_workspaces to enumerate all workspaces you have access to.
+•  Integrate create_project and create_repository within your CI/CD pipeline to automate part of your project setup process.
 
-Once running, the server provides multiple tool endpoints which can be called via the MCP protocol. The tools include, but are not limited to:
+Error Handling
+--------------
+The server performs extensive error checking for API responses. If an HTTP error code is returned or the JSON response fails to validate against the Pydantic models, descriptive error messages are provided suggesting the potential issue, thus simplifying the debugging process.
 
-User & Workspace Tools:
-  • get_current_user – Retrieves the authenticated user’s profile.
-  • get_user_profile – Fetches public profile data for any specified user.
-  • list_workspaces – Lists accessible workspaces with optional role filtering.
-  • get_workspace – Retrieves details of a specific workspace.
-
-Project & Repository Management:
-  • list_projects, create_project, get_project, update_project, delete_project – Manage projects within workspaces.
-  • list_repositories, get_repository, create_repository, update_repository, delete_repository – Manage repositories.
-
-Branch & Tag Tools:
-  • list_branches, create_branch – Manage branch operations.
-  • list_tags, create_tag – Manage tags.
-
-Commit & Source Code Tools:
-  • list_commits, get_commit, get_commit_diff – Retrieve commit details and diffs.
-  • add_commit_comment – Add comments to commits.
-  • get_file_content – Retrieve the contents of a file from a repository.
-
-Pull Request Tools:
-  • list_pull_requests, create_pull_request, get_pull_request – Manage pull requests.
-  • approve_pull_request, unapprove_pull_request, merge_pull_request, decline_pull_request – Handle PR lifecycle events.
-  • add_pull_request_comment – Add comments within pull requests.
-
-Repository Settings & Administration:
-  • list_branch_restrictions, create_branch_restriction – Configure branch restrictions.
-  • list_deploy_keys, add_deploy_key, delete_deploy_key – Manage deployment keys.
-  • list_webhooks, create_webhook, delete_webhook – Manage webhooks.
-
-Issue Tracker:
-  • list_issues, create_issue, get_issue, update_issue – Work with Bitbucket issue tracker.
-  • add_issue_comment – Add comments to issues.
-
-Pipelines (CI/CD):
-  • list_pipelines, trigger_pipeline, get_pipeline, stop_pipeline – Manage pipelines and trigger builds.
-
-Snippets:
-  • list_snippets, create_snippet, get_snippet, get_snippet_file, delete_snippet – Manage code snippets.
-
-Customization
--------------
-The server leverages helper functions such as get_auth_header and make_request to authenticate and make API calls. The response formatting is handled by format_response, which outputs well-indented JSON responses for ease of debugging and integration.
-
-If additional functionality is needed, custom tools can be added using the @mcp.tool() decorator, extending the server’s capabilities.
-
-Support & Contributing
-------------------------
-For additional support or to report issues, please contact the repository maintainer. Contributions, bug reports, and feature requests are welcome.
+Contributing
+------------
+Contributions, issues, and feature requests are welcome. Please open an issue or submit a pull request on the project repository if you would like to contribute improvements or report bugs.
 
 License
 -------
-[Include your project license here.]
+This project is licensed under the MIT License. See the LICENSE file for details.
 
-Conclusion
-----------
-This Bitbucket Cloud MCP Server provides a professional and robust integration with Bitbucket’s API. It is ideal for teams looking to automate repository management, streamline project workflows, and integrate Bitbucket with other systems seamlessly. Enjoy managing your Bitbucket resources programmatically with clarity and efficiency!
+Contact
+-------
+For questions or support, please create an issue in the repository or contact the maintainer directly.
+
+This Bitbucket Cloud MCP Server offers a complete, extensible solution for integrating Bitbucket Cloud functionalities into your projects, automated workflows, and development pipelines with ease and reliability. Enjoy seamless Bitbucket automation!

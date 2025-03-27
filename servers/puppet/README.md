@@ -3,101 +3,86 @@ Puppet MCP Server
 
 Overview
 --------
-The Puppet MCP Server is an implementation of an MCP server that integrates with the Puppet API. It facilitates various Puppet operations such as listing environments, fetching node details, retrieving facts, and running Puppet commands through orchestrated tools. With this server, you can easily interact with your Puppet infrastructure programmatically.
+The Puppet MCP Server is an implementation built on top of FastMCP that provides a straightforward integration with a Puppet API. With this server, users can easily query Puppet environments, retrieve node details, fetch node facts, execute Puppet runs, and perform PuppetDB queries. The server handles authenticated requests to the Puppet API and offers a well-organized set of resources and tools to simplify managing Puppet operations.
 
 Features
 --------
-• Environment Listing: Retrieve a list of all available Puppet environments using the Puppet API.  
-• Node Information: Get detailed information about specific nodes by their certname.  
-• Fact Retrieval: Fetch node-specific facts to assist with infrastructure troubleshooting or reporting.  
-• Puppet Command Execution: Run Puppet on specific nodes via an orchestrated command, with options for no-operation (noop) mode.  
-• PuppetDB Querying: Execute PuppetDB queries to fetch detailed inventory data from your Puppet database.  
+• Authenticated Requests: Automates the authentication process using environment variables.  
+• Environment Listing: Retrieve a list of all available Puppet environments.  
+• Node Information: Get detailed information for a specific Puppet node by its certificate name.  
+• Facts Retrieval: Fetch detailed facts for a given node.  
+• Puppet Run: Trigger Puppet runs on a set of nodes with customization options (environment and noop mode).  
+• PuppetDB Query: Execute custom queries against the PuppetDB endpoint.
 
-Tools & Resources
------------------
-The server exposes several resources and tools via its MCP endpoints:
+Setup & Configuration
+---------------------
+1. Requirements:
+   • Python 3.x  
+   • The required dependencies listed in your project’s requirements.txt (typically includes requests and mcp.server.fastmcp libraries)
 
-Resources:
-- puppet://environments  
-  • Function: List all Puppet environments.  
-  • Usage: Sends a GET request to /puppet/v3/environments through the Puppet API.
+2. Environment Variables:  
+   The server requires the following environment variables to be set for authentication with the Puppet API:
+   - PUPPET_URL: The base URL of the Puppet server (e.g., https://puppet.example.com:4433).  
+   - PUPPET_AUTH_TOKEN: Your Puppet authentication token.  
 
-- puppet://nodes/{certname}  
-  • Function: Retrieve node information by certname.  
-  • Usage: Sends a GET request to /puppet/v3/nodes/{certname}.
+   Example (Linux/Mac):
+     $ export PUPPET_URL=https://puppet.example.com:4433  
+     $ export PUPPET_AUTH_TOKEN=your_auth_token_here
 
-- puppet://facts/{certname}  
-  • Function: Get facts for a specific node.  
-  • Usage: Sends a GET request to /puppet/v3/facts/{certname}.
+3. Logging:  
+   Basic logging is set up to output timestamped logs that include the server, level, and message. Adjust logging configurations if needed.
 
-Tools:
-- run_puppet  
-  • Function: Execute a Puppet run on specified nodes  
-  • Inputs:  
-    - nodes (list of strings): List of node identifiers  
-    - environment (string, default: "production"): The target environment for the Puppet run  
-    - noop (boolean, default: False): Whether to run in no-operation mode  
-  • Usage: Sends a POST request to /orchestrator/v1/command/deploy with the provided data.
-
-- query_puppetdb  
-  • Function: Execute a PuppetDB query  
-  • Inputs:  
-    - query (string): The query to run against PuppetDB  
-  • Usage: Sends a GET request to /pdb/query/v4 with the query as a parameter.
-
-Configuration
--------------
-Before running the Puppet MCP Server, ensure the following environment variables are properly set:
-
-• PUPPET_URL  
-  - Description: The base URL for your Puppet API.  
-  - Example: export PUPPET_URL=https://puppet.example.com:4433
-
-• PUPPET_AUTH_TOKEN  
-  - Description: Your authentication token for accessing the Puppet API.  
-  - Example: export PUPPET_AUTH_TOKEN=your_auth_token_here
-
-Installation & Setup
+Resources & Endpoints
 ----------------------
-1. Prerequisites:
-   - Python 3.7 or higher
-   - Required dependencies: requests, mcp.server.fastmcp (Ensure you have the appropriate MCP server library installed)
+The server defines several resources corresponding to Puppet API endpoints:
 
-2. Installation:
-   - Clone the repository or download the server script.
-   - Install necessary Python packages using pip. For example:
-     
-         pip install requests
+• List Environments  
+  Resource: puppet://environments  
+  Description: Returns a list of all available Puppet environments via a GET request.
 
-3. Setting Environment Variables:
-   - Set the required environment variables (PUPPET_URL and PUPPET_AUTH_TOKEN) in your shell or configuration file before starting the server.
-   
-         export PUPPET_URL=https://puppet.example.com:4433
-         export PUPPET_AUTH_TOKEN=your_auth_token_here
+• Get Node Information  
+  Resource: puppet://nodes/{certname}  
+  Description: Retrieves node details using the node’s unique certificate name.  
 
-Usage
+• Get Node Facts  
+  Resource: puppet://facts/{certname}  
+  Description: Fetches facts pertaining to the specified node.
+
+Tools
 -----
-Run the Puppet MCP Server using:
-     
-     python <script_name>.py
+The following tools are exposed to perform actions that modify or query Puppet’s state:
 
-Upon execution, the server will start and listen for MCP resource and tool requests. The logging is configured at the INFO level to help track operations and errors.
+• run_puppet  
+  Description: Executes a Puppet run on specified nodes.  
+  Inputs:
+   - nodes (list of strings): The list of node certificate names to target.  
+   - environment (string, optional): Specifies the environment (default is “production”).  
+   - noop (boolean, optional): Set to true if you want a no-operation (dry-run) mode.  
+  Endpoint Invoked: POST on /orchestrator/v1/command/deploy
 
-Handling Requests:
-- For authenticated communication with the Puppet API, the server uses the helper function which automatically appends the required X-Authentication header.
-- In case of request failures, errors are logged, and exceptions are raised for further analysis.
+• query_puppetdb  
+  Description: Executes a query against PuppetDB and returns the results.  
+  Inputs:
+   - query (string): The PuppetDB query string.  
+  Endpoint Invoked: GET on /pdb/query/v4
 
-Troubleshooting
----------------
-- If the environment variables PUPPET_URL or PUPPET_AUTH_TOKEN are not set, the server will log an error and request you to set these before running.
-- Ensure that the Puppet API is reachable from your network, and the provided credentials have the necessary permissions for the desired endpoints.
+Implementation Details
+----------------------
+• The server uses the FastMCP framework to define resources and tools with clear decorators (@mcp.resource and @mcp.tool).  
+• The helper function puppet_request centralizes API calls to the Puppet server, ensuring that all API requests are authenticated via the “X-Authentication” header.  
+• Error handling is in place to log issues when requests fail, making troubleshooting easier.
 
-License
--------
-This project is provided as-is under the terms of its respective open-source license. Please refer to the LICENSE file for further details.
+Running the Server
+------------------
+Before running the server, ensure that the required environment variables (PUPPET_URL and PUPPET_AUTH_TOKEN) are properly set. If these variables are missing, the server will log an error and exit.
 
-Contact
--------
-For any further queries or assistance, please contact the project maintainer.
+To start the server, simply run the Python script:
+   $ python <script_name>.py
 
-This README provides all the necessary information to setup, configure, and use the Puppet MCP Server for interacting with your Puppet infrastructure efficiently.
+Once running, the server will expose the defined resources and tools so that clients can perform operations on the Puppet API endpoints.
+
+Conclusion
+----------
+The Puppet MCP Server streamlines interacting with your Puppet infrastructure by abstracting the direct API interactions into simple, declarative resources and tools. Whether you need to retrieve environment or node details, fetch facts, execute Puppet runs, or query PuppetDB, this server provides a robust and extendable solution for managing Puppet operations.
+
+For further customization and advanced configurations, refer to the FastMCP documentation and integrate additional endpoints as needed.

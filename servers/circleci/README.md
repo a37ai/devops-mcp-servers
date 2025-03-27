@@ -1,119 +1,106 @@
 CircleCI MCP Server
-=====================
+===================
 
 Overview
 --------
-The CircleCI MCP Server is an implementation that maps CircleCI API endpoints to a suite of tools, enabling a Language Model (LLM) to interact directly with CircleCI projects, pipelines, workflows, jobs, and more. With this server, you can perform a wide range of operations – from creating and managing contexts and environment variables to triggering pipelines, fetching insights, handling webhooks, and managing policies.
+The CircleCI MCP Server is an advanced Microservice Control Protocol (MCP) server that provides a comprehensive interface to the CircleCI API. It exposes a collection of tools mapped directly to CircleCI endpoints, enabling seamless interaction with CircleCI projects, pipelines, workflows, jobs, and additional resources. This server is designed to facilitate programmatic CircleCI operations, making it ideal for integrating with large language models (LLMs) or building custom automation workflows.
 
-Key Features
-------------
-•  Comprehensive API Coverage:  
-   - Interact with CircleCI contexts, pipelines, jobs, workflows, projects, schedules, webhooks, and policies.  
-   - Query insights and metrics including summary and timeseries data.
+Features
+--------
+• Comprehensive API Coverage:  
+  Interact with CircleCI projects, pipelines, workflows, jobs, contexts, environment variables, schedules, and more.  
+• Context Management:  
+  Create, retrieve, update, and delete contexts and related restrictions and environment variables.  
+• Pipeline Operations:  
+  List, trigger, continue, and extract configurations/details of pipelines including support for advanced pipeline triggers.  
+• Workflow and Job Control:  
+  Manage workflows (query, cancel, rerun, approve jobs) and access detailed job information and artifacts.  
+• Insights and Metrics:  
+  Retrieve summary and timeseries metrics for projects and organizations to monitor performance.  
+• Webhook and Policy Management:  
+  Manage outbound webhooks for event-driven integrations and configure policy-related endpoints for decision-making audits.  
+• OIDC Token Custom Claims:  
+  Provides endpoints for managing org- and project-level custom claims for OIDC identity tokens.
 
-•  Context Management:  
-   - Create, list, update, and delete contexts.  
-   - Manage environment variables and project restrictions within contexts.
+Tools & Endpoints
+------------------
+The server registers a diverse set of tools that use various HTTP methods to interact directly with CircleCI API endpoints. Some of the key tools include:
 
-•  Pipeline & Job Control:  
-   - Trigger new pipelines, continue pipelines from the setup phase, and fetch detailed pipeline configurations.
-   - Cancel and retrieve job details and artifacts.
+• Context Management  
+  – create_context(name, owner)  
+  – list_contexts(owner_id, owner_slug, owner_type, page_token)  
+  – get_context(context_id)  
+  – delete_context(context_id)  
+  – Manage environment variables and restrictions (add, update, remove).  
 
-•  Workflow Operations:  
-   - Approve, cancel, and rerun workflows.
-   - Retrieve workflow summary details and associated jobs.
+• Pipeline Operations  
+  – list_pipelines(org_slug, page_token, mine)  
+  – continue_pipeline(continuation_key, configuration, parameters)  
+  – get_pipeline(pipeline_id)  
+  – get_pipeline_config(pipeline_id)  
+  – trigger_pipeline(project_slug, branch, tag, parameters)  
+  – Trigger a new pipeline with trigger_new_pipeline(...).  
 
-•  Project & Schedule Administration:  
-   - Create projects, manage checkout keys, and environment variables.
-   - Create, list, update, and delete project schedules.
+• Workflow & Job Management  
+  – Get workflow details, cancel or rerun workflows, and approve pending jobs.  
+  – Retrieve job details, cancel jobs by number or ID, and list job artifacts and test metadata.
 
-•  Webhook & Policy Management:  
-   - Setup, update, and delete outbound webhooks to receive event notifications.
-   - Manage custom OIDC claims and policy bundles to enforce security and access controls.
+• Insight & Reporting  
+  – get_project_summary_metrics, get_job_timeseries_data, get_org_summary_metrics  
+  – Retrieve branch and workflow-level insights for precise monitoring and reporting.
 
-•  User & Collaboration Endpoints:  
-   - Fetch current user details and list collaborations for seamless integration with CircleCI accounts.
+• Webhook & Policy Endpoints  
+  – Create, update, list, and delete webhooks.  
+  – Manage decision audit logs, policy bundles, and custom claims for enhanced security and compliance.
+
+• User & Collaboration Management  
+  – get_current_user, get_collaborations, and get_user to provide user-specific information for integration.
 
 Configuration & Setup
 ---------------------
-1. Environment Variables
-   - Ensure the following environment variables are set in your environment (e.g., via a .env file):
+1. Environment Variables:  
+   Before running the server, ensure that the following environment variables are set:
 
-     • CIRCLECI_API_KEY  
-       Your CircleCI API key obtained from the CircleCI developer dashboard.
-     
-     • CIRCLECI_API_BASE (optional)  
-       Defaults to "https://circleci.com/api/v2" if not provided.
-   
-   Example .env file:
-   
-       CIRCLECI_API_KEY=your_circleci_api_key_here
-       CIRCLECI_API_BASE=https://circleci.com/api/v2
+   • CIRCLECI_API_KEY  
+  Your CircleCI API key. This is required to authenticate API requests.
 
-2. API Key Requirement
-   - The MCP server checks for the presence of the CIRCLECI_API_KEY on startup. Failure to set this environment variable will result in a ValueError. Make sure you sign up for an API account with CircleCI and follow their guidelines to obtain your API key.
+   • CIRCLECI_API_BASE (optional)  
+  Defaults to "https://circleci.com/api/v2". Update this if using an alternative API endpoint.
 
-3. Dependencies
-   - Python 3.7+
-   - Required libraries: httpx, pydantic, python-dotenv, FastMCP (from mcp.server.fastmcp)
+2. Installation:  
+   – Clone or download the repository containing the CircleCI MCP Server code.  
+   – Install the required Python packages. For example:
 
-4. Installation
-   - Install the dependencies with pip:
+   pip install httpx pydantic python-dotenv
 
-         pip install httpx pydantic python-dotenv fastmcp
+3. Running the Server:  
+   Execute the server directly from the command line:
 
-   - Add any additional dependencies as needed by your project.
+   python your_script_name.py
+
+   This will initialize the MCP server with the "CircleCI" namespace and expose all the defined tools for use.
 
 Usage
 -----
-The MCP server is designed to expose a variety of tools (decorated with @mcp.tool()) which map directly to CircleCI API endpoints. You can run the server directly:
+Each tool function is decorated with @mcp.tool() and represents an endpoint corresponding to a CircleCI API operation. Tools accept specific parameters and return JSON responses directly from CircleCI. This design allows an LLM or any client to seamlessly invoke these tools and manage CircleCI resources programmatically.
 
-     python your_script.py
+For example, to trigger a new pipeline for a given project, call the tool “trigger_pipeline” with the appropriate project slug, branch, tag, and optional parameters. Similarly, to manage contexts or fetch workflow details, utilize the corresponding tool endpoint as documented.
 
-When executed, the server initializes and starts listening for incoming tool requests. Each tool function corresponds to a specific CircleCI API endpoint, performing actions such as:
-  
-   • Creating and retrieving contexts  
-   • Listing project pipelines and triggering new pipelines  
-   • Cancelling jobs and retrieving job details/artifacts  
-   • Managing workflow actions (approve, cancel, rerun)  
-   • Creating schedules, setting webhooks, and updating project settings  
-   • Handling OIDC token claims and policy bundles for secure interactions  
-   • Retrieving user and collaboration information
-   
-For each tool, the function arguments are clearly documented. For example:
+Development & Contributing
+--------------------------
+• Code Structure:  
+  The server uses Pydantic models to clearly define request/response schemas for all endpoints.  
+  HTTP requests are handled asynchronously via the httpx library to ensure efficient interaction with the CircleCI API.
 
-   - create_context(name: str, owner: Dict)  
-     Creates a new context with the specified name and owner details.
-   
-   - trigger_pipeline(project_slug: str, branch: Optional[str]=None, tag: Optional[str]=None, parameters: Optional[Dict]=None)  
-     Triggers a new pipeline for the given project.
-
-Refer to each function’s docstring in the source code for detailed usage instructions and expected input parameters.
-
-Advanced Usage & Customization
--------------------------------
-• Middleware & Error Handling:
-  - The server uses httpx for asynchronous HTTP requests and handles errors with proper exception messages including HTTP status codes and error details.
-
-• Extensibility:
-  - Additional endpoints can be integrated by adding new tool functions decorated with @mcp.tool(), following the provided examples.
-  
-• Integration with LLMs:
-  - The server is ideally designed for LLM-based interactions, where high-level commands are translated into API calls against a CircleCI environment.
-
-Support & Additional Information
-----------------------------------
-For further details, refer to the CircleCI API documentation:  
-https://circleci.com/docs/api/v2/  
-
-Contributions and enhancements are welcome. Please follow best practices and ensure that any modifications maintain the professional and descriptive structure of tool implementations.
+• Contribution Guidelines:  
+  Contributions for additional endpoints, bug fixes, or improvements are welcome. Please adhere to the project’s coding standards and include appropriate tests when submitting pull requests.
 
 License
 -------
-This project is released under an open source license. Please review the LICENSE file for more information.
+Distributed under an open source license. See the LICENSE file for more information.
 
 Contact
 -------
-For questions or further details, feel free to reach out via the project's repository issues or the support channel provided by your organization.
+For further questions or feedback, please open an issue in the repository or contact the maintainers directly.
 
-Happy automating your CircleCI projects with the CircleCI MCP Server!
+By providing a rich set of tools and endpoints, the CircleCI MCP Server serves as a robust backbone for any integration that requires dynamic, API-based control over CircleCI resources. Get started today and streamline your CircleCI workflows seamlessly!
